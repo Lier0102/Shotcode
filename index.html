@@ -3,10 +3,36 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>shotcode — screenshot to clean code</title>
-  <meta name="description" content="Drop a screenshot of code, crop the region, get OCR'd, syntax-highlighted, copy-pasteable text. No backend, no signup." />
+  <title>shotcode — code-screenshot restoration</title>
+  <meta name="description" content="Drop a screenshot of code, crop the region, get OCR'd, syntax-highlighted, copy-pasteable text. No backend, no upload." />
+  <!--
+    Content Security Policy: restricts script/style/connect/worker/img origins.
+    - 'wasm-unsafe-eval' is required for Tesseract.js to compile WebAssembly in modern browsers.
+    - blob: in worker-src is required for Tesseract's web worker (it instantiates from a Blob URL).
+    - blob: / data: in img-src support uploaded files and crop previews.
+    - tessdata.projectnaptha.com is Tesseract.js's default langPath origin for traineddata.
+    SRI is enforced on the three CDN script/link tags below. Tesseract's internal
+    WASM/traineddata fetches cannot be SRI-checked from the page; their origins are
+    restricted by connect-src instead.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self';
+    script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval';
+    worker-src 'self' blob:;
+    connect-src 'self' https://cdn.jsdelivr.net https://tessdata.projectnaptha.com;
+    img-src 'self' blob: data:;
+    style-src 'self' https://cdn.jsdelivr.net;
+    font-src 'self';
+    object-src 'none';
+    base-uri 'self';
+    form-action 'none';
+    frame-ancestors 'none';
+  " />
   <link rel="stylesheet" href="style.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/styles/github-dark.min.css" />
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/styles/github-dark.min.css"
+        integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH"
+        crossorigin="anonymous" />
 </head>
 <body>
   <header>
@@ -66,8 +92,9 @@
       </div>
 
       <div class="control-group">
-        <span class="control-label">Image</span>
-        <label class="chip"><input type="checkbox" id="preprocess-toggle" checked /><span>Enhance</span></label>
+        <label for="preset-select" class="control-label">Preprocess</label>
+        <select id="preset-select" title="Preprocessing pipeline applied to the image before OCR"></select>
+        <span id="preset-description" class="muted preset-description"></span>
       </div>
 
       <div class="control-group control-actions">
@@ -77,8 +104,18 @@
     </section>
 
     <div id="progress-wrap" class="progress-wrap hidden" aria-live="polite">
-      <div class="progress-bar"><div id="progress-fill"></div></div>
+      <div class="progress-row">
+        <div class="progress-bar"><div id="progress-fill"></div></div>
+        <button id="cancel-btn" type="button" class="cancel-btn">Cancel</button>
+      </div>
       <p id="progress-text" class="progress-text">Initializing OCR…</p>
+    </div>
+
+    <div id="retry-banner" class="retry-banner hidden" aria-live="polite">
+      <span class="retry-icon" aria-hidden="true">↻</span>
+      <span id="retry-message" class="retry-message"></span>
+      <div id="retry-actions" class="retry-actions"></div>
+      <button id="retry-dismiss" type="button" class="retry-dismiss" title="Dismiss" aria-label="Dismiss">×</button>
     </div>
 
     <section id="panes" class="panes hidden">
@@ -114,7 +151,14 @@
           <button id="download-btn" type="button" class="ghost">Download</button>
           <button id="copy-btn" type="button">Copy</button>
         </div>
-        <div id="warnings" class="warnings hidden"></div>
+        <div id="warnings" class="warnings hidden">
+          <button id="warnings-summary" type="button" class="warnings-summary" aria-expanded="false" aria-controls="warnings-list">
+            <span class="warnings-icon" aria-hidden="true">⚠</span>
+            <span id="warnings-count" class="warnings-count">0 issues</span>
+            <span class="warnings-chevron" aria-hidden="true">▾</span>
+          </button>
+          <ul id="warnings-list" class="warnings-list" hidden></ul>
+        </div>
         <div class="output-body">
           <pre id="output-pre"><code id="output" class="hljs"></code></pre>
           <textarea id="edit-area" class="edit-area hidden" spellcheck="false" aria-label="Edit OCR output"></textarea>
@@ -134,8 +178,12 @@
     </p>
   </footer>
 
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"
+          integrity="sha384-1zP4ZOtlk2FXAOiUArpMuWf7INJJKe/ROfYFAVSeUa11DEfXdKWGiPI3dVma2Gt0"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/highlight.min.js"
+          integrity="sha384-GdEWAbCjn+ghjX0gLx7/N1hyTVmPAjdC2OvoAA0RyNcAOhqwtT8qnbCxWle2+uJX"
+          crossorigin="anonymous"></script>
   <script src="app.js"></script>
 </body>
 </html>

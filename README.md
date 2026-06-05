@@ -1,68 +1,86 @@
 # shotcode
 
-> Drop a screenshot of code. Get clean, copy-pasteable text.
+> A code-screenshot restoration tool. Faster than retyping, easier to verify, safer to copy.
 
-A tiny static web app that runs OCR on a screenshot of code in your browser, then renders the result as a syntax-highlighted, copy-paste-ready code block. No backend, no signup, no images leave your machine.
+shotcode turns screenshots of code into clean, copy-pasteable text — entirely in your browser. Crop to the code, pick a preprocessing preset, eyeball the confidence marks, fix the inevitable `l`/`1` slip, and ship.
 
-![demo placeholder — record a GIF showing paste → OCR → copy](docs/demo.gif)
+![demo placeholder — record a GIF showing paste → crop → review → copy](docs/demo.gif)
 
-## Why
+## Quick start
 
-You see a chunk of code on StackOverflow, in a tweet, in a video, or in a screenshot a coworker sent — and you want to actually use it. Retyping is annoying. This is the smallest possible tool that fixes that.
+It's a static site. Serve over HTTP (not `file://`):
+
+```bash
+python -m http.server 8000     # or: npx serve .
+```
+
+Then open <http://localhost:8000>. Paste a screenshot with Ctrl+V, drag a selection over the code area, and review the result.
 
 ## Features
 
-- **Side-by-side workspace**: original image on the left, editable result on the right
-- **Drag-to-select a region** before OCR — skip browser chrome, line numbers, and editor gutters by feeding only the code area to the recognizer (big accuracy win)
-- **Zoom controls** (in / out / fit) for precise cropping on dense screenshots
-- **Drop, click, or paste** (Ctrl+V anywhere) to load an image
-- **In-browser OCR** with [Tesseract.js](https://github.com/naptha/tesseract.js) — nothing uploaded
-- **Image enhancement pipeline**: upscales small screenshots, boosts contrast, and inverts dark themes
-- **Toggleable cleanup** rules, all applied live without re-running OCR:
+**Workspace**
+- Side-by-side image + editable output
+- Drag-to-select crop region; zoom in / out / fit
+- Drop, click, or paste images (Ctrl+V anywhere)
+
+**OCR & cleanup**
+- In-browser OCR via [Tesseract.js](https://github.com/naptha/tesseract.js)
+- Preprocessing presets: Auto, Light theme, Dark theme, Low contrast, Tiny font, Terminal, None
+- Toggleable cleanup, re-applied live without re-running OCR:
   - normalize smart quotes / dashes / NBSPs / zero-width chars / ligatures
   - strip leading line numbers (auto-detected)
   - strip Python `>>>`/`...` or shell `$`/`#` prompts (auto-detected, language-aware)
-  - normalize indentation (tabs → 4 spaces, de-indent common leading whitespace)
-- **Suspicious-pattern warnings**: flags unbalanced brackets/braces/parens and residual smart quotes
-- **Review view** with per-word confidence underlines (wavy amber for &lt;70%, wavy red for &lt;50%) — hover for the exact score
-- **Auto-detected syntax highlighting** via [highlight.js](https://github.com/highlightjs/highlight.js), or pick a language manually
-- **In-place editing** for fixing the inevitable `l`/`1` or `O`/`0` slip
-- **Copy or download** as a file with the right extension
-- **Zero build step** — plain HTML/CSS/JS, deploys to GitHub Pages or any static host
+  - normalize indentation (tabs → spaces, strip common leading whitespace)
 
-## Run locally
+**Verification**
+- Per-word confidence underlines in Review view (wavy amber for &lt;70%, wavy red for &lt;50%)
+- Structured warnings for unbalanced brackets / braces / parens / quotes — with line:column and a "jump" button
+- Cancel a slow OCR run and retry with a different preset; low-confidence results suggest alternatives automatically
 
-It's a static site. Pick one:
+**Output**
+- Auto-detected or manual syntax highlighting via [highlight.js](https://github.com/highlightjs/highlight.js)
+- In-place editing
+- Copy or download with the right file extension
 
-```bash
-# Python
-python -m http.server 8000
+## Tips for best results
 
-# Node
-npx serve .
-```
+- **Crop tight.** Excluding line-number gutters, sidebars, status bars, and browser chrome is the single biggest accuracy gain.
+- **Larger characters generally OCR more reliably.** Bump the editor's font size before capturing if you can.
+- **Use native screenshot tools, not photos of a monitor.** JPEG artifacts and screen moiré significantly hurt accuracy.
+- **Monospace fonts only.** Proportional fonts produce poor results.
+- **Try a different preset.** "Auto" handles most cases; switch to "Terminal" for dark terminal captures, "Tiny font" for small text.
+- **Light themes tend to outperform dark themes**, though the enhancer can invert dark themes automatically.
 
-Then open <http://localhost:8000>.
+## What this is not
+
+- Not a general-purpose document OCR tool — for prose, use [Tesseract](https://github.com/tesseract-ocr/tesseract) directly or a cloud OCR API.
+- Not for handwriting, math, or diagrams.
+- Not a PDF reader — export your PDF page to PNG first.
+- Not guaranteed correct. Every output should be reviewed before running.
+
+## Privacy
+
+- Images are processed locally in your browser using WebAssembly. **No backend.** No image upload. No account. No analytics.
+- The page loads three dependencies from a CDN (`cdn.jsdelivr.net`): the Tesseract.js script, the highlight.js script, and the highlight.js theme CSS.
+- The Tesseract worker fetches its WASM core and the `eng.traineddata` language file at runtime from `cdn.jsdelivr.net` and/or `tessdata.projectnaptha.com`. Browsers typically cache these, but **persistent offline support is not yet implemented** — that's PWA work on the roadmap.
+- A Content-Security-Policy `<meta>` tag in `index.html` restricts script, style, image, and connection origins to the hosts above. Anything else is blocked by the browser.
+- Subresource Integrity (SRI) hashes can be pinned on the two script tags and the theme stylesheet. Run `tools/refresh-sri.sh` to compute the current hashes and paste them in. The Tesseract worker's internal fetches (WASM, traineddata) cannot be SRI-checked from the page; their origins are restricted by CSP instead. A vendored-dependencies build script (in the roadmap) will close this gap for users who need stronger guarantees.
 
 ## Deploy to GitHub Pages
 
 1. Push this repo to GitHub.
 2. Settings → Pages → Source: `Deploy from a branch`, branch: `main`, folder: `/ (root)`.
-3. Done. Your app is live at `https://<you>.github.io/<repo>/`.
-
-## Limits & honest caveats
-
-- Tesseract is good but not magic on code. Tiny fonts, low contrast, anti-aliased screenshots, and dark themes all hurt accuracy. Try the lightest theme + largest font you can.
-- It currently OCRs English only (the `eng` traineddata). Code characters work, but exotic Unicode probably won't.
-- Common confusions: `l` vs `1` vs `I`, `0` vs `O`, smart quotes, and lost indentation. Always eyeball the output before pasting into prod.
+3. Live at `https://<you>.github.io/<repo>/`.
 
 ## Roadmap
 
-- [ ] Optional "clean with LLM" mode (bring your own API key, stays client-side)
+- [ ] PWA / offline support (cache Tesseract WASM + traineddata)
+- [ ] Vendored-dependency option for fully self-hosted use
+- [ ] Brace-based indentation repair with diff preview
+- [ ] Char-level homoglyph and Unicode confusable flags
 - [ ] Resizable crop selection (currently drag-to-redraw)
-- [ ] Smarter indent recovery (detect modal indent unit, snap leading whitespace)
-- [ ] PWA / installable, with the Tesseract model cached
 - [ ] Multi-image batch
+- [ ] Optional, BYOK LLM cleanup — off by default, sends extracted text only, always shows a diff before applying
 
 ## License
 

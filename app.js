@@ -1,5 +1,7 @@
 (() => {
-  // ---------- DOM ----------
+  // ============================================================
+  //  DOM refs
+  // ============================================================
   const $ = (id) => document.getElementById(id);
 
   const dropzone = $('dropzone');
@@ -12,13 +14,20 @@
   const cleanupLineNums = $('cleanup-line-nums');
   const cleanupPrompts = $('cleanup-prompts');
   const cleanupIndent = $('cleanup-indent');
-  const preprocessToggle = $('preprocess-toggle');
+  const presetSelect = $('preset-select');
+  const presetDescription = $('preset-description');
   const rerunBtn = $('rerun-btn');
   const resetBtn = $('reset-btn');
 
   const progressWrap = $('progress-wrap');
   const progressFill = $('progress-fill');
   const progressText = $('progress-text');
+  const cancelBtn = $('cancel-btn');
+
+  const retryBanner = $('retry-banner');
+  const retryMessage = $('retry-message');
+  const retryActions = $('retry-actions');
+  const retryDismiss = $('retry-dismiss');
 
   const previewImg = $('preview-img');
   const imageContainer = $('image-container');
@@ -35,6 +44,9 @@
   const detectedLangEl = $('detected-lang');
   const confidenceEl = $('confidence-badge');
   const warningsEl = $('warnings');
+  const warningsSummary = $('warnings-summary');
+  const warningsCount = $('warnings-count');
+  const warningsList = $('warnings-list');
   const outputPre = $('output-pre');
   const outputEl = $('output');
   const editArea = $('edit-area');
@@ -45,12 +57,14 @@
   const downloadBtn = $('download-btn');
   const copyBtn = $('copy-btn');
 
-  // ---------- state ----------
+  // ============================================================
+  //  State
+  // ============================================================
   let currentImage = null;     // File
   let loadedImage = null;      // HTMLImageElement
-  let rawText = '';            // raw OCR text
-  let rawWords = [];           // Tesseract word objects
-  let currentText = '';        // cleaned text
+  let rawText = '';
+  let rawWords = [];
+  let currentText = '';
   let lastConfidence = null;
   let worker = null;
   let isEditing = false;
@@ -58,8 +72,12 @@
 
   let zoom = 1;
   let imgW = 0, imgH = 0;
-  let cropRect = null;         // { x, y, w, h } in natural-image pixels
+  let cropRect = null;
   let dragStart = null;
+
+  let currentPresetId = 'auto';
+  let ocrJobId = 0;            // monotonic; owns "current run"
+  let ocrRunning = false;
 
   const LANG_TO_EXT = {
     python: 'py', javascript: 'js', typescript: 'ts', bash: 'sh',
@@ -68,6 +86,202 @@
     html: 'html', css: 'css', json: 'json', yaml: 'yaml',
     markdown: 'md', plaintext: 'txt',
   };
+
+  // ============================================================
+  //  Preprocessing presets (DSL)
+  // ============================================================
+  const PREPROCESS_PRESETS = [
+    { id: 'auto', label: 'Auto', description: 'Upscale, grayscale, auto-invert dark, mild contrast',
+      steps: [
+        { op: 'upscale', targetWidth: 1400 },
+        { op: 'grayscale' },
+        { op: 'invertIfDark' },
+        { op: 'contrast', amount: 1.5 },
+      ] },
+    { id: 'light', label: 'Light theme', description: 'For IDE / editor light themes',
+      steps: [
+        { op: 'upscale', targetWidth: 1400 },
+        { op: 'grayscale' },
+        { op: 'contrast', amount: 1.3 },
+      ] },
+    { id: 'dark', label: 'Dark theme', description: 'Forces invert before contrast',
+      steps: [
+        { op: 'upscale', targetWidth: 1400 },
+        { op: 'grayscale' },
+        { op: 'invert' },
+        { op: 'contrast', amount: 1.5 },
+      ] },
+    { id: 'low-contrast', label: 'Low contrast', description: 'Aggressive contrast for faded shots',
+      steps: [
+        { op: 'upscale', targetWidth: 1600 },
+        { op: 'grayscale' },
+        { op: 'invertIfDark' },
+        { op: 'contrast', amount: 2.2 },
+      ] },
+    { id: 'tiny-font', label: 'Tiny font', description: 'Heavier upscale + sharpen',
+      steps: [
+        { op: 'upscale', targetWidth: 2000 },
+        { op: 'grayscale' },
+        { op: 'invertIfDark' },
+        { op: 'contrast', amount: 1.4 },
+        { op: 'sharpen', amount: 0.5 },
+      ] },
+    { id: 'terminal', label: 'Terminal', description: 'Dark terminal with threshold',
+      steps: [
+        { op: 'upscale', targetWidth: 1400 },
+        { op: 'grayscale' },
+        { op: 'invert' },
+        { op: 'contrast', amount: 1.7 },
+        { op: 'threshold', method: 'fixed', value: 140 },
+      ] },
+    { id: 'none', label: 'None (raw)', description: 'Skip preprocessing entirely', steps: [] },
+  ];
+
+  function getPreset(id) { return PREPROCESS_PRESETS.find(p => p.id === id); }
+
+  function sourceToCanvas(src) {
+    if (src instanceof HTMLCanvasElement) return src;
+    const w = src.naturalWidth || src.width;
+    const h = src.naturalHeight || src.height;
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(src, 0, 0);
+    return c;
+  }
+
+  function mapPixels(canvas, fn) {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    fn(img.data, canvas.width, canvas.height);
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+  }
+
+  function stepUpscale(canvas, { targetWidth }) {
+    if (canvas.width >= targetWidth) return canvas;
+    const scale = Math.min(3, targetWidth / canvas.width);
+    const out = document.createElement('canvas');
+    out.width = Math.round(canvas.width * scale);
+    out.height = Math.round(canvas.height * scale);
+    const ctx = out.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(canvas, 0, 0, out.width, out.height);
+    return out;
+  }
+
+  function stepGrayscale(canvas) {
+    return mapPixels(canvas, (d) => {
+      for (let i = 0; i < d.length; i += 4) {
+        const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+        d[i] = d[i+1] = d[i+2] = g;
+      }
+    });
+  }
+
+  function stepInvert(canvas) {
+    return mapPixels(canvas, (d) => {
+      for (let i = 0; i < d.length; i += 4) {
+        d[i] = 255 - d[i]; d[i+1] = 255 - d[i+1]; d[i+2] = 255 - d[i+2];
+      }
+    });
+  }
+
+  function stepInvertIfDark(canvas) {
+    // Sample-based mean luminance — cheaper than scanning everything
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = img.data;
+    const stride = Math.max(4, Math.floor(d.length / 4 / 50000)) * 4;
+    let sum = 0, n = 0;
+    for (let i = 0; i < d.length; i += stride) {
+      sum += 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      n++;
+    }
+    return (sum / n) < 128 ? stepInvert(canvas) : canvas;
+  }
+
+  function stepContrast(canvas, { amount }) {
+    return mapPixels(canvas, (d) => {
+      for (let i = 0; i < d.length; i += 4) {
+        for (let k = 0; k < 3; k++) {
+          let v = (d[i+k] - 128) * amount + 128;
+          d[i+k] = v < 0 ? 0 : v > 255 ? 255 : v;
+        }
+      }
+    });
+  }
+
+  function stepThreshold(canvas, { value = 128 } = {}) {
+    return mapPixels(canvas, (d) => {
+      for (let i = 0; i < d.length; i += 4) {
+        const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+        const v = g < value ? 0 : 255;
+        d[i] = d[i+1] = d[i+2] = v;
+      }
+    });
+  }
+
+  // 3x3 unsharp mask: out = src * (1 + amount) - blur * amount (approx via sharpen kernel)
+  function stepSharpen(canvas, { amount = 0.5 } = {}) {
+    const w = canvas.width, h = canvas.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const src = ctx.getImageData(0, 0, w, h);
+    const out = ctx.createImageData(w, h);
+    const s = src.data, o = out.data;
+    const center = 1 + 4 * amount;
+    const side = -amount;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        for (let k = 0; k < 3; k++) {
+          let v = s[i + k] * center;
+          if (x > 0)     v += s[i - 4 + k] * side;
+          if (x < w - 1) v += s[i + 4 + k] * side;
+          if (y > 0)     v += s[i - w * 4 + k] * side;
+          if (y < h - 1) v += s[i + w * 4 + k] * side;
+          o[i + k] = v < 0 ? 0 : v > 255 ? 255 : v;
+        }
+        o[i + 3] = s[i + 3];
+      }
+    }
+    ctx.putImageData(out, 0, 0);
+    return canvas;
+  }
+
+  const STEP_FNS = {
+    upscale: stepUpscale, grayscale: stepGrayscale, invert: stepInvert,
+    invertIfDark: stepInvertIfDark, contrast: stepContrast,
+    threshold: stepThreshold, sharpen: stepSharpen,
+  };
+
+  function applyPreset(source, presetId) {
+    const preset = getPreset(presetId);
+    if (!preset || !preset.steps.length) return source;
+    let canvas = sourceToCanvas(source);
+    for (const step of preset.steps) {
+      const fn = STEP_FNS[step.op];
+      if (fn) canvas = fn(canvas, step);
+    }
+    return canvas;
+  }
+
+  function populatePresetSelect() {
+    for (const p of PREPROCESS_PRESETS) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      opt.title = p.description;
+      presetSelect.appendChild(opt);
+    }
+    presetSelect.value = currentPresetId;
+    updatePresetDescription();
+  }
+
+  function updatePresetDescription() {
+    const p = getPreset(currentPresetId);
+    presetDescription.textContent = p ? p.description : '';
+  }
 
   // ============================================================
   //  File handling
@@ -94,7 +308,6 @@
     if (f && f.type.startsWith('image/')) handleFile(f);
   });
 
-  // Drop anywhere once panes are showing
   document.addEventListener('dragover', (e) => {
     if (panes.classList.contains('hidden')) return;
     e.preventDefault();
@@ -105,7 +318,6 @@
     if (f && f.type.startsWith('image/')) { e.preventDefault(); handleFile(f); }
   });
 
-  // Paste
   document.addEventListener('paste', (e) => {
     if (isEditing) return;
     const items = e.clipboardData && e.clipboardData.items;
@@ -122,8 +334,8 @@
     if (!file.type.startsWith('image/')) { alert('Please drop an image file.'); return; }
     currentImage = file;
     cropRect = null;
+    clearRetryBanner();
 
-    // Load to <img>
     const url = URL.createObjectURL(file);
     previewImg.src = url;
     await new Promise((resolve, reject) => {
@@ -187,7 +399,6 @@
     updateCropUI();
   });
 
-  // Drag-to-select
   imageStage.addEventListener('mousedown', (e) => {
     if (e.button !== 0 || !loadedImage) return;
     const rect = imageStage.getBoundingClientRect();
@@ -234,94 +445,122 @@
   }
 
   // ============================================================
-  //  Preprocessing
+  //  OCR (with cancel + retry)
   // ============================================================
-  function preprocessSource(source) {
-    const srcW = source.naturalWidth || source.width;
-    const srcH = source.naturalHeight || source.height;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
-    const targetMinWidth = 1400;
-    const scale = srcW < targetMinWidth ? Math.min(3, targetMinWidth / srcW) : 1;
-
-    canvas.width = Math.round(srcW * scale);
-    canvas.height = Math.round(srcH * scale);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-
-    // Mean luminance for dark-theme detection
-    let sum = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-    }
-    const mean = sum / (data.length / 4);
-    const dark = mean < 128;
-    const contrast = 1.5;
-
-    for (let i = 0; i < data.length; i += 4) {
-      let g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      if (dark) g = 255 - g;
-      g = (g - 128) * contrast + 128;
-      g = g < 0 ? 0 : g > 255 ? 255 : g;
-      data[i] = data[i + 1] = data[i + 2] = g;
-    }
-    ctx.putImageData(imageData, 0, 0);
-    return canvas;
+  async function initWorker() {
+    worker = await Tesseract.createWorker('eng', 1, {
+      logger: (m) => {
+        if (m.status === 'recognizing text') {
+          const pct = Math.round(m.progress * 100);
+          progressFill.style.width = pct + '%';
+          progressText.textContent = `Recognizing text… ${pct}%`;
+        } else if (m.status) {
+          progressText.textContent = cap(m.status) + '…';
+        }
+      },
+    });
+    await worker.setParameters({
+      tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : '6',
+      preserve_interword_spaces: '1',
+    });
   }
 
-  // ============================================================
-  //  OCR
-  // ============================================================
   async function runOCR() {
     if (!loadedImage) return;
-
+    const job = ++ocrJobId;
+    ocrRunning = true;
+    clearRetryBanner();
     progressWrap.classList.remove('hidden');
     progressFill.style.width = '0%';
     progressText.textContent = 'Initializing OCR…';
     rerunBtn.disabled = true;
 
     try {
-      if (!worker) {
-        worker = await Tesseract.createWorker('eng', 1, {
-          logger: (m) => {
-            if (m.status === 'recognizing text') {
-              const pct = Math.round(m.progress * 100);
-              progressFill.style.width = pct + '%';
-              progressText.textContent = `Recognizing text… ${pct}%`;
-            } else if (m.status) {
-              progressText.textContent = cap(m.status) + '…';
-            }
-          },
-        });
-        await worker.setParameters({
-          tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : '6',
-          preserve_interword_spaces: '1',
-        });
-      }
+      if (!worker) await initWorker();
+      if (job !== ocrJobId) return;
 
       let source = loadedImage;
       if (cropRect) source = cropToCanvas(loadedImage, cropRect);
-      if (preprocessToggle.checked) source = preprocessSource(source);
+      source = applyPreset(source, currentPresetId);
 
       const { data } = await worker.recognize(source);
+      if (job !== ocrJobId) return;
+
       rawText = data.text;
       rawWords = collectWords(data);
       lastConfidence = data.confidence;
       reapplyCleanup();
+
+      if (typeof data.confidence === 'number' && data.confidence < 60) {
+        suggestRetry('lowconf', `${Math.round(data.confidence)}% overall`);
+      }
     } catch (err) {
+      if (job !== ocrJobId) return;     // cancelled — swallow rejection
       console.error(err);
-      progressText.textContent = 'OCR failed: ' + (err && err.message ? err.message : err);
+      progressWrap.classList.add('hidden');
+      suggestRetry('fail', err && err.message ? err.message : String(err));
     } finally {
-      rerunBtn.disabled = false;
+      if (job === ocrJobId) {
+        ocrRunning = false;
+        rerunBtn.disabled = false;
+      }
     }
   }
 
-  // Tesseract v5 may give words on data.words OR nested under blocks/paragraphs/lines.
+  async function cancelOCR() {
+    if (!ocrRunning) return;
+    ocrJobId++;                          // invalidate in-flight
+    ocrRunning = false;
+    if (worker) {
+      const w = worker;
+      worker = null;
+      try { await w.terminate(); } catch { /* ignore */ }
+    }
+    progressWrap.classList.add('hidden');
+    rerunBtn.disabled = false;
+    suggestRetry('cancel');
+  }
+
+  cancelBtn.addEventListener('click', () => cancelOCR());
+
+  function suggestRetry(reason, detail) {
+    const msg =
+      reason === 'cancel'  ? 'OCR cancelled.' :
+      reason === 'fail'    ? `OCR failed${detail ? `: ${detail}` : ''}.` :
+      reason === 'lowconf' ? `Low confidence${detail ? ` (${detail})` : ''}.` :
+                             '';
+    retryMessage.textContent = `${msg} Try another preprocessing preset:`;
+
+    const alternatives = PREPROCESS_PRESETS
+      .filter(p => p.id !== currentPresetId && p.id !== 'none')
+      .slice(0, 3);
+
+    retryActions.replaceChildren();
+    for (const p of alternatives) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = p.label;
+      btn.title = p.description;
+      btn.addEventListener('click', () => {
+        currentPresetId = p.id;
+        presetSelect.value = p.id;
+        updatePresetDescription();
+        clearRetryBanner();
+        runOCR();
+      });
+      retryActions.appendChild(btn);
+    }
+    retryBanner.classList.remove('hidden');
+  }
+
+  function clearRetryBanner() {
+    retryBanner.classList.add('hidden');
+    retryActions.replaceChildren();
+  }
+
+  retryDismiss.addEventListener('click', () => clearRetryBanner());
+
+  // Tesseract v5: words may live on data.words OR nested in blocks
   function collectWords(data) {
     if (Array.isArray(data.words) && data.words.length) return data.words;
     const out = [];
@@ -338,7 +577,7 @@
   }
 
   // ============================================================
-  //  Cleanup
+  //  Cleanup pipeline
   // ============================================================
   function reapplyCleanup() {
     progressWrap.classList.add('hidden');
@@ -346,16 +585,17 @@
 
     let text = rawText;
     if (cleanupNormalize.checked) text = normalizeChars(text);
-    if (cleanupLineNums.checked) text = stripLineNumbers(text);
-    if (cleanupPrompts.checked) text = stripPrompts(text, langSelect.value);
-    if (cleanupIndent.checked) text = normalizeIndent(text);
+    if (cleanupLineNums.checked)  text = stripLineNumbers(text);
+    if (cleanupPrompts.checked)   text = stripPrompts(text, langSelect.value);
+    if (cleanupIndent.checked)    text = normalizeIndent(text);
     text = finalTrim(text);
 
     currentText = text;
     renderHighlighted(currentText);
     renderConfidence(lastConfidence);
-    renderWarnings(detectSuspicious(currentText));
+    renderWarnings(buildWarnings(currentText));
     if (isReview) renderReviewView();
+    if (isEditing) editArea.value = currentText;
   }
 
   function normalizeChars(text) {
@@ -371,40 +611,36 @@
     return out;
   }
 
-  // Strip leading line numbers if most non-empty lines have them
   function stripLineNumbers(text) {
     const lines = text.split('\n');
     const nonEmpty = lines.filter(l => l.trim().length > 0);
     if (nonEmpty.length < 3) return text;
-    const re = /^\s*\d+[\s:|.\)]\s+/;
+    const re = /^\s*\d{1,5}[\s:|.\)]\s+/;
     const matched = nonEmpty.filter(l => re.test(l)).length;
     if (matched < Math.max(3, nonEmpty.length * 0.6)) return text;
     return lines.map(l => l.replace(re, '')).join('\n');
   }
 
-  // Strip Python or shell prompts (whichever dominates)
   function stripPrompts(text, lang) {
     const lines = text.split('\n');
-    const pyRe = /^\s*(>>>|\.\.\.)\s?/;
-    const shRe = /^\s*[\$#]\s+/;
+    const pyRe = /^\s*(>>>|\.\.\.) ?/;
+    const shRe = /^\s*[\$#] /;
     let py = 0, sh = 0;
     for (const l of lines) {
       if (pyRe.test(l)) py++;
       if (shRe.test(l)) sh++;
     }
-    // Respect explicit language pick
-    const langFavorsPy = lang === 'python';
-    const langFavorsSh = lang === 'bash';
-    if ((py >= 2 || langFavorsPy) && py >= sh) {
+    const favorsPy = lang === 'python';
+    const favorsSh = lang === 'bash';
+    if ((py >= 2 || favorsPy) && py >= sh) {
       return lines.map(l => l.replace(pyRe, '')).join('\n');
     }
-    if (sh >= 2 || langFavorsSh) {
+    if (sh >= 2 || favorsSh) {
       return lines.map(l => l.replace(shRe, '')).join('\n');
     }
     return text;
   }
 
-  // Tabs → 4 spaces, then strip common leading indent
   function normalizeIndent(text) {
     let out = text.replace(/\t/g, '    ');
     const lines = out.split('\n');
@@ -430,39 +666,184 @@
   }
 
   // ============================================================
-  //  Warnings (suspicious patterns)
+  //  Warnings (structured)
   // ============================================================
-  function detectSuspicious(text) {
-    const issues = [];
-    const counts = { '(': 0, ')': 0, '[': 0, ']': 0, '{': 0, '}': 0 };
-    let inSingle = false, inDouble = false, inBacktick = false, escaped = false;
-    for (const c of text) {
-      if (escaped) { escaped = false; continue; }
-      if (c === '\\') { escaped = true; continue; }
-      if (!inDouble && !inBacktick && c === "'") inSingle = !inSingle;
-      else if (!inSingle && !inBacktick && c === '"') inDouble = !inDouble;
-      else if (!inSingle && !inDouble && c === '`') inBacktick = !inBacktick;
-      else if (!inSingle && !inDouble && !inBacktick && c in counts) counts[c]++;
+  // Returns Warning[] from a single string-and-comment-aware walk over the text.
+  function scanBalance(text) {
+    const stack = [];
+    const warns = [];
+    let line = 1, col = 1;
+    let inStr = null;        // { ch, line, col } | null
+    let lineCm = false, blockCm = false, escaped = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      const n = text[i + 1];
+
+      if (c === '\n') { line++; col = 1; lineCm = false; continue; }
+      if (escaped)    { escaped = false; col++; continue; }
+      if (lineCm)     { col++; continue; }
+      if (blockCm) {
+        if (c === '*' && n === '/') { blockCm = false; col += 2; i++; continue; }
+        col++; continue;
+      }
+      if (inStr) {
+        if (c === '\\') { escaped = true; col++; continue; }
+        if (c === inStr.ch) { inStr = null; col++; continue; }
+        col++; continue;
+      }
+      if (c === '/' && n === '/') { lineCm  = true; col += 2; i++; continue; }
+      if (c === '/' && n === '*') { blockCm = true; col += 2; i++; continue; }
+      if (c === '"' || c === "'" || c === '`') {
+        inStr = { ch: c, line, col }; col++; continue;
+      }
+      if (c === '(' || c === '[' || c === '{') {
+        stack.push({ ch: c, line, col });
+      } else if (c === ')' || c === ']' || c === '}') {
+        const expected = c === ')' ? '(' : c === ']' ? '[' : '{';
+        const top = stack[stack.length - 1];
+        if (!top) {
+          warns.push({
+            severity: 'error', code: 'extra-close', source: 'balance',
+            message: `Extra '${c}' with no matching opener`,
+            position: { line, col, length: 1 },
+          });
+        } else if (top.ch !== expected) {
+          warns.push({
+            severity: 'error', code: 'mismatch', source: 'balance',
+            message: `'${c}' does not match '${top.ch}' opened earlier`,
+            position: { line, col, length: 1 },
+            related: { line: top.line, col: top.col },
+          });
+          stack.pop();
+        } else {
+          stack.pop();
+        }
+      }
+      col++;
     }
-    if (counts['('] !== counts[')']) issues.push(`Unbalanced parentheses (${counts['(']} open, ${counts[')']} close)`);
-    if (counts['['] !== counts[']']) issues.push(`Unbalanced brackets (${counts['[']} open, ${counts[']']} close)`);
-    if (counts['{'] !== counts['}']) issues.push(`Unbalanced braces (${counts['{']} open, ${counts['}']} close)`);
-    if (/[‘’“”]/.test(text)) issues.push('Smart quotes still present — toggle "Normalize chars" or fix manually');
-    if (/[–—]/.test(text)) issues.push('En/em dashes still present — these are usually `-` in code');
-    return issues;
+
+    if (inStr) {
+      warns.push({
+        severity: 'warn', code: 'unterminated-string', source: 'balance',
+        message: `Unterminated ${inStr.ch === '`' ? 'template' : 'string'} literal opened with ${inStr.ch}`,
+        position: { line: inStr.line, col: inStr.col, length: 1 },
+      });
+    }
+    for (const top of stack) {
+      warns.push({
+        severity: 'warn', code: 'unclosed', source: 'balance',
+        message: `Unclosed '${top.ch}'`,
+        position: { line: top.line, col: top.col, length: 1 },
+      });
+    }
+    return warns;
   }
 
-  function renderWarnings(issues) {
-    if (!issues.length) { warningsEl.classList.add('hidden'); warningsEl.innerHTML = ''; return; }
-    const ul = document.createElement('ul');
-    for (const i of issues) {
-      const li = document.createElement('li');
-      li.textContent = i;
-      ul.appendChild(li);
+  function scanCleanupResidue(text) {
+    const warns = [];
+    if (/[‘’“”]/.test(text)) {
+      warns.push({
+        severity: 'info', code: 'smart-quote-residue', source: 'cleanup',
+        message: 'Smart quotes still present — toggle "Normalize chars" or edit manually',
+      });
     }
-    warningsEl.innerHTML = '';
-    warningsEl.appendChild(ul);
+    if (/[–—]/.test(text)) {
+      warns.push({
+        severity: 'info', code: 'dash-residue', source: 'cleanup',
+        message: 'En/em dashes still present — usually `-` in code',
+      });
+    }
+    return warns;
+  }
+
+  function buildWarnings(text) {
+    const all = [...scanBalance(text), ...scanCleanupResidue(text)];
+    const sevOrder = { error: 0, warn: 1, info: 2 };
+    return all.sort((a, b) => {
+      const s = sevOrder[a.severity] - sevOrder[b.severity];
+      if (s) return s;
+      const al = a.position?.line ?? Infinity;
+      const bl = b.position?.line ?? Infinity;
+      return al - bl;
+    });
+  }
+
+  function renderWarnings(warnings) {
+    if (!warnings.length) {
+      warningsEl.classList.add('hidden');
+      warningsEl.classList.remove('has-error');
+      warningsList.replaceChildren();
+      warningsList.hidden = true;
+      warningsSummary.setAttribute('aria-expanded', 'false');
+      return;
+    }
     warningsEl.classList.remove('hidden');
+    const hasError = warnings.some(w => w.severity === 'error');
+    warningsEl.classList.toggle('has-error', hasError);
+
+    const n = warnings.length;
+    warningsCount.textContent = `${n} issue${n === 1 ? '' : 's'}`;
+
+    warningsList.replaceChildren();
+    for (const w of warnings) {
+      const li = document.createElement('li');
+      li.className = `warning warning-${w.severity}`;
+
+      const pos = document.createElement('span');
+      pos.className = 'warning-pos';
+      pos.textContent = w.position ? `L${w.position.line}:${w.position.col}` : '—';
+      li.appendChild(pos);
+
+      const msg = document.createElement('span');
+      msg.className = 'warning-msg';
+      msg.textContent = w.message;
+      if (w.related) {
+        const small = document.createElement('span');
+        small.className = 'muted';
+        small.textContent = ` (opened at L${w.related.line}:${w.related.col})`;
+        msg.appendChild(small);
+      }
+      li.appendChild(msg);
+
+      const goto = document.createElement('button');
+      goto.type = 'button';
+      goto.className = 'warning-goto';
+      goto.textContent = 'jump';
+      if (!w.position) { goto.disabled = true; }
+      else goto.addEventListener('click', () => gotoLocation(w.position.line));
+      li.appendChild(goto);
+
+      warningsList.appendChild(li);
+    }
+  }
+
+  warningsSummary.addEventListener('click', () => {
+    const expanded = warningsSummary.getAttribute('aria-expanded') === 'true';
+    warningsSummary.setAttribute('aria-expanded', String(!expanded));
+    warningsList.hidden = expanded;
+  });
+
+  function gotoLocation(targetLine /* 1-based */) {
+    // If we're in edit mode, focus the textarea and place caret at line start.
+    if (isEditing) {
+      const lines = editArea.value.split('\n');
+      let offset = 0;
+      for (let i = 0; i < Math.min(targetLine - 1, lines.length); i++) {
+        offset += lines[i].length + 1;
+      }
+      editArea.focus();
+      editArea.setSelectionRange(offset, offset);
+      return;
+    }
+    // Review view doesn't share line geometry with the highlighted view;
+    // switch back to code so the scroll target is actually visible.
+    if (isReview) setViewMode('code');
+    const cs = getComputedStyle(outputEl);
+    const lineHeight = parseFloat(cs.lineHeight) || 21;
+    const padTop = parseFloat(cs.paddingTop) || 0;
+    const top = padTop + (targetLine - 1) * lineHeight - 24;
+    outputPre.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
   }
 
   // ============================================================
@@ -538,7 +919,6 @@
   //  View / edit mode
   // ============================================================
   function setViewMode(mode) {
-    // mode: 'code' | 'edit' | 'review'
     outputPre.classList.toggle('hidden', mode !== 'code');
     editArea.classList.toggle('hidden', mode !== 'edit');
     reviewView.classList.toggle('hidden', mode !== 'review');
@@ -556,7 +936,7 @@
     if (isEditing) {
       currentText = editArea.value;
       renderHighlighted(currentText);
-      renderWarnings(detectSuspicious(currentText));
+      renderWarnings(buildWarnings(currentText));
       setViewMode(isReview ? 'review' : 'code');
     } else {
       editArea.value = currentText;
@@ -577,20 +957,22 @@
   // ============================================================
   //  Wiring
   // ============================================================
-  langSelect.addEventListener('change', () => {
-    if (!rawText) return;
-    reapplyCleanup();
-  });
+  langSelect.addEventListener('change', () => { if (rawText) reapplyCleanup(); });
 
   [cleanupNormalize, cleanupLineNums, cleanupPrompts, cleanupIndent].forEach((el) =>
     el.addEventListener('change', () => { if (rawText) reapplyCleanup(); })
   );
 
-  preprocessToggle.addEventListener('change', () => { if (loadedImage) runOCR(); });
+  presetSelect.addEventListener('change', () => {
+    currentPresetId = presetSelect.value;
+    updatePresetDescription();
+    // Deliberate: do NOT auto-run OCR — keep preset flipping cheap. User hits Re-run.
+  });
 
   rerunBtn.addEventListener('click', () => runOCR());
 
   resetBtn.addEventListener('click', () => {
+    if (ocrRunning) { cancelOCR(); }
     currentImage = null;
     loadedImage = null;
     rawText = '';
@@ -606,6 +988,7 @@
     progressWrap.classList.add('hidden');
     warningsEl.classList.add('hidden');
     outputEl.textContent = '';
+    clearRetryBanner();
     setViewMode('code');
   });
 
@@ -656,4 +1039,9 @@
   }
 
   function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  // ============================================================
+  //  Init
+  // ============================================================
+  populatePresetSelect();
 })();
