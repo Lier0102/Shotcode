@@ -55,6 +55,11 @@
             <option value="markdown">Markdown</option>
             <option value="plaintext">plain text</option>
           </select>
+          <label class="toggle">
+            <input type="checkbox" id="preprocess-toggle" checked />
+            <span>Enhance image</span>
+            <span class="toggle-hint" title="Upscales small images, boosts contrast, and inverts dark themes before OCR. Usually a big accuracy win.">?</span>
+          </label>
           <button id="rerun-btn" type="button">Re-run OCR</button>
           <button id="reset-btn" type="button" class="secondary">Clear</button>
         </div>
@@ -67,10 +72,18 @@
 
       <div id="output-wrap" class="output-wrap hidden">
         <div class="output-header">
-          <span id="detected-lang" class="lang-badge">—</span>
-          <button id="copy-btn" type="button">Copy</button>
+          <div class="header-left">
+            <span id="detected-lang" class="lang-badge">—</span>
+            <span id="confidence-badge" class="confidence-badge hidden">—</span>
+          </div>
+          <div class="header-right">
+            <button id="edit-btn" type="button" class="ghost">Edit</button>
+            <button id="download-btn" type="button" class="ghost">Download</button>
+            <button id="copy-btn" type="button">Copy</button>
+          </div>
         </div>
         <pre><code id="output" class="hljs"></code></pre>
+        <textarea id="edit-area" class="edit-area hidden" spellcheck="false" aria-label="Edit OCR output"></textarea>
       </div>
     </section>
   </main>

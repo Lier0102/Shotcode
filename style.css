@@ -205,6 +205,68 @@ kbd {
   border-color: var(--border-strong);
 }
 
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0.25rem 0;
+}
+
+.toggle input[type="checkbox"] {
+  appearance: none;
+  width: 32px;
+  height: 18px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.toggle input[type="checkbox"]::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: transform 0.15s, background 0.15s;
+}
+
+.toggle input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.toggle input[type="checkbox"]:checked::after {
+  transform: translateX(14px);
+  background: var(--bg);
+}
+
+.toggle-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  cursor: help;
+}
+
 .progress-wrap {
   margin-top: 1.25rem;
   background: var(--bg-elev);
@@ -245,9 +307,18 @@ kbd {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.75rem;
   padding: 0.5rem 0.75rem;
   background: var(--bg-elev-2);
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.header-left,
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .lang-badge {
@@ -260,7 +331,20 @@ kbd {
   border-radius: 999px;
 }
 
-#copy-btn {
+.confidence-badge {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.confidence-badge.high { color: var(--success); border-color: rgba(63, 185, 80, 0.4); }
+.confidence-badge.mid  { color: #d29922; border-color: rgba(210, 153, 34, 0.4); }
+.confidence-badge.low  { color: var(--danger); border-color: rgba(248, 81, 73, 0.4); }
+
+.output-header button {
   font-family: var(--font-sans);
   font-size: 0.85rem;
   padding: 0.35rem 0.85rem;
@@ -272,14 +356,52 @@ kbd {
   transition: all 0.15s;
 }
 
-#copy-btn:hover {
+.output-header button:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-#copy-btn.copied {
+.output-header button.ghost {
+  color: var(--text-dim);
+}
+
+.output-header button.ghost:hover {
+  color: var(--accent);
+}
+
+.output-header button.ghost.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(88, 166, 255, 0.08);
+}
+
+.output-header button.flash {
   border-color: var(--success);
   color: var(--success);
+}
+
+.edit-area {
+  display: block;
+  width: 100%;
+  min-height: 280px;
+  max-height: 480px;
+  padding: 1rem 1.25rem;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: none;
+  border-top: 0;
+  outline: none;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.55;
+  tab-size: 4;
+  white-space: pre;
+  overflow: auto;
+}
+
+.edit-area:focus {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .output-wrap pre {

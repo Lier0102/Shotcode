@@ -14,8 +14,12 @@ You see a chunk of code on StackOverflow, in a tweet, in a video, or in a screen
 
 - **Drop, click, or paste** (Ctrl+V anywhere on the page) an image
 - **In-browser OCR** with [Tesseract.js](https://github.com/naptha/tesseract.js) — nothing uploaded
+- **Image enhancement pipeline**: upscales small screenshots, boosts contrast, and inverts dark themes for materially better OCR accuracy
+- **Code-aware cleanup**: straightens smart quotes, normalizes dashes, strips zero-width junk, fixes common ligatures
 - **Auto-detected syntax highlighting** via [highlight.js](https://github.com/highlightjs/highlight.js), or pick a language manually
-- **One-click copy** to clipboard
+- **Confidence indicator** so you know when to double-check the output
+- **In-place editing** for fixing the inevitable `l`/`1` or `O`/`0` slip
+- **Copy or download** as a file with the right extension
 - **Zero build step** — plain HTML/CSS/JS, deploys to GitHub Pages or any static host
 
 ## Run locally
@@ -47,9 +51,10 @@ Then open <http://localhost:8000>.
 ## Roadmap
 
 - [ ] Optional "clean with LLM" mode (bring your own API key, stays client-side)
-- [ ] Indentation normalization heuristics
+- [ ] Per-line indentation normalization heuristics
 - [ ] PWA / installable
 - [ ] Multi-image batch
+- [ ] Highlight low-confidence words inline so you know exactly what to verify
 
 ## License
 
