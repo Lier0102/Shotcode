@@ -4,14 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>shotcode — screenshot to clean code</title>
-  <meta name="description" content="Drop a screenshot of code, get OCR'd, syntax-highlighted, copy-pasteable text. No backend, no signup." />
+  <meta name="description" content="Drop a screenshot of code, crop the region, get OCR'd, syntax-highlighted, copy-pasteable text. No backend, no signup." />
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/styles/github-dark.min.css" />
 </head>
 <body>
   <header>
     <h1>shotcode</h1>
-    <p class="tagline">Drop a screenshot of code. Get clean, copy-pasteable text.</p>
+    <p class="tagline">Drop a screenshot of code. Crop the region. Get clean, copy-pasteable text.</p>
   </header>
 
   <main>
@@ -28,62 +28,98 @@
       </div>
     </section>
 
-    <section id="preview-section" class="hidden" aria-live="polite">
-      <div class="preview-row">
-        <img id="preview-img" alt="Uploaded screenshot preview" />
-        <div class="controls">
-          <label for="lang-select">Language</label>
-          <select id="lang-select">
-            <option value="auto">auto-detect</option>
-            <option value="python">Python</option>
-            <option value="javascript">JavaScript</option>
-            <option value="typescript">TypeScript</option>
-            <option value="bash">Bash / Shell</option>
-            <option value="go">Go</option>
-            <option value="rust">Rust</option>
-            <option value="java">Java</option>
-            <option value="c">C</option>
-            <option value="cpp">C++</option>
-            <option value="csharp">C#</option>
-            <option value="ruby">Ruby</option>
-            <option value="php">PHP</option>
-            <option value="sql">SQL</option>
-            <option value="html">HTML</option>
-            <option value="css">CSS</option>
-            <option value="json">JSON</option>
-            <option value="yaml">YAML</option>
-            <option value="markdown">Markdown</option>
-            <option value="plaintext">plain text</option>
-          </select>
-          <label class="toggle">
-            <input type="checkbox" id="preprocess-toggle" checked />
-            <span>Enhance image</span>
-            <span class="toggle-hint" title="Upscales small images, boosts contrast, and inverts dark themes before OCR. Usually a big accuracy win.">?</span>
-          </label>
-          <button id="rerun-btn" type="button">Re-run OCR</button>
-          <button id="reset-btn" type="button" class="secondary">Clear</button>
+    <section id="controls-bar" class="controls-bar hidden">
+      <div class="control-group">
+        <label for="lang-select" class="control-label">Language</label>
+        <select id="lang-select">
+          <option value="auto">auto-detect</option>
+          <option value="python">Python</option>
+          <option value="javascript">JavaScript</option>
+          <option value="typescript">TypeScript</option>
+          <option value="bash">Bash / Shell</option>
+          <option value="go">Go</option>
+          <option value="rust">Rust</option>
+          <option value="java">Java</option>
+          <option value="c">C</option>
+          <option value="cpp">C++</option>
+          <option value="csharp">C#</option>
+          <option value="ruby">Ruby</option>
+          <option value="php">PHP</option>
+          <option value="sql">SQL</option>
+          <option value="html">HTML</option>
+          <option value="css">CSS</option>
+          <option value="json">JSON</option>
+          <option value="yaml">YAML</option>
+          <option value="markdown">Markdown</option>
+          <option value="plaintext">plain text</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <span class="control-label">Cleanup</span>
+        <div class="chip-row">
+          <label class="chip"><input type="checkbox" id="cleanup-normalize" checked /><span>Normalize chars</span></label>
+          <label class="chip"><input type="checkbox" id="cleanup-line-nums" checked /><span>Line numbers</span></label>
+          <label class="chip"><input type="checkbox" id="cleanup-prompts" checked /><span>Shell / REPL prompts</span></label>
+          <label class="chip"><input type="checkbox" id="cleanup-indent" /><span>Normalize indent</span></label>
         </div>
       </div>
 
-      <div id="progress-wrap" class="progress-wrap hidden">
-        <div class="progress-bar"><div id="progress-fill"></div></div>
-        <p id="progress-text" class="progress-text">Initializing OCR…</p>
+      <div class="control-group">
+        <span class="control-label">Image</span>
+        <label class="chip"><input type="checkbox" id="preprocess-toggle" checked /><span>Enhance</span></label>
       </div>
 
-      <div id="output-wrap" class="output-wrap hidden">
-        <div class="output-header">
-          <div class="header-left">
-            <span id="detected-lang" class="lang-badge">—</span>
-            <span id="confidence-badge" class="confidence-badge hidden">—</span>
-          </div>
-          <div class="header-right">
-            <button id="edit-btn" type="button" class="ghost">Edit</button>
-            <button id="download-btn" type="button" class="ghost">Download</button>
-            <button id="copy-btn" type="button">Copy</button>
+      <div class="control-group control-actions">
+        <button id="rerun-btn" type="button">Re-run OCR</button>
+        <button id="reset-btn" type="button" class="secondary">New image</button>
+      </div>
+    </section>
+
+    <div id="progress-wrap" class="progress-wrap hidden" aria-live="polite">
+      <div class="progress-bar"><div id="progress-fill"></div></div>
+      <p id="progress-text" class="progress-text">Initializing OCR…</p>
+    </div>
+
+    <section id="panes" class="panes hidden">
+      <!-- Image pane -->
+      <div class="pane image-pane">
+        <div class="pane-toolbar">
+          <span class="pane-title">Original</span>
+          <span id="selection-info" class="muted">Drag to select a region</span>
+          <div class="spacer"></div>
+          <button id="crop-clear-btn" type="button" class="ghost" disabled title="Clear selection">Clear</button>
+          <button id="zoom-out-btn" type="button" class="ghost icon" title="Zoom out">−</button>
+          <button id="zoom-fit-btn" type="button" class="ghost" title="Fit to pane">Fit</button>
+          <button id="zoom-in-btn" type="button" class="ghost icon" title="Zoom in">+</button>
+        </div>
+        <div class="image-container" id="image-container">
+          <div class="image-stage" id="image-stage">
+            <img id="preview-img" alt="Uploaded screenshot" draggable="false" />
+            <div class="crop-overlay hidden" id="crop-overlay" aria-hidden="true">
+              <div class="crop-rect" id="crop-rect"></div>
+            </div>
           </div>
         </div>
-        <pre><code id="output" class="hljs"></code></pre>
-        <textarea id="edit-area" class="edit-area hidden" spellcheck="false" aria-label="Edit OCR output"></textarea>
+      </div>
+
+      <!-- Output pane -->
+      <div class="pane output-pane">
+        <div class="pane-toolbar">
+          <span id="detected-lang" class="lang-badge">—</span>
+          <span id="confidence-badge" class="confidence-badge hidden">—</span>
+          <div class="spacer"></div>
+          <button id="view-btn" type="button" class="ghost" title="Toggle review view with low-confidence words highlighted">Review</button>
+          <button id="edit-btn" type="button" class="ghost">Edit</button>
+          <button id="download-btn" type="button" class="ghost">Download</button>
+          <button id="copy-btn" type="button">Copy</button>
+        </div>
+        <div id="warnings" class="warnings hidden"></div>
+        <div class="output-body">
+          <pre id="output-pre"><code id="output" class="hljs"></code></pre>
+          <textarea id="edit-area" class="edit-area hidden" spellcheck="false" aria-label="Edit OCR output"></textarea>
+          <div id="review-view" class="review-view hidden" aria-label="Per-word confidence review"></div>
+        </div>
       </div>
     </section>
   </main>

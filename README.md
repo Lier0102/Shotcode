@@ -12,12 +12,20 @@ You see a chunk of code on StackOverflow, in a tweet, in a video, or in a screen
 
 ## Features
 
-- **Drop, click, or paste** (Ctrl+V anywhere on the page) an image
+- **Side-by-side workspace**: original image on the left, editable result on the right
+- **Drag-to-select a region** before OCR — skip browser chrome, line numbers, and editor gutters by feeding only the code area to the recognizer (big accuracy win)
+- **Zoom controls** (in / out / fit) for precise cropping on dense screenshots
+- **Drop, click, or paste** (Ctrl+V anywhere) to load an image
 - **In-browser OCR** with [Tesseract.js](https://github.com/naptha/tesseract.js) — nothing uploaded
-- **Image enhancement pipeline**: upscales small screenshots, boosts contrast, and inverts dark themes for materially better OCR accuracy
-- **Code-aware cleanup**: straightens smart quotes, normalizes dashes, strips zero-width junk, fixes common ligatures
+- **Image enhancement pipeline**: upscales small screenshots, boosts contrast, and inverts dark themes
+- **Toggleable cleanup** rules, all applied live without re-running OCR:
+  - normalize smart quotes / dashes / NBSPs / zero-width chars / ligatures
+  - strip leading line numbers (auto-detected)
+  - strip Python `>>>`/`...` or shell `$`/`#` prompts (auto-detected, language-aware)
+  - normalize indentation (tabs → 4 spaces, de-indent common leading whitespace)
+- **Suspicious-pattern warnings**: flags unbalanced brackets/braces/parens and residual smart quotes
+- **Review view** with per-word confidence underlines (wavy amber for &lt;70%, wavy red for &lt;50%) — hover for the exact score
 - **Auto-detected syntax highlighting** via [highlight.js](https://github.com/highlightjs/highlight.js), or pick a language manually
-- **Confidence indicator** so you know when to double-check the output
 - **In-place editing** for fixing the inevitable `l`/`1` or `O`/`0` slip
 - **Copy or download** as a file with the right extension
 - **Zero build step** — plain HTML/CSS/JS, deploys to GitHub Pages or any static host
@@ -51,10 +59,10 @@ Then open <http://localhost:8000>.
 ## Roadmap
 
 - [ ] Optional "clean with LLM" mode (bring your own API key, stays client-side)
-- [ ] Per-line indentation normalization heuristics
-- [ ] PWA / installable
+- [ ] Resizable crop selection (currently drag-to-redraw)
+- [ ] Smarter indent recovery (detect modal indent unit, snap leading whitespace)
+- [ ] PWA / installable, with the Tesseract model cached
 - [ ] Multi-image batch
-- [ ] Highlight low-confidence words inline so you know exactly what to verify
 
 ## License
 
