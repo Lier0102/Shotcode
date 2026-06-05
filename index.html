@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shotcode — screenshot to clean code</title>
+  <meta name="description" content="Drop a screenshot of code, get OCR'd, syntax-highlighted, copy-pasteable text. No backend, no signup." />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/styles/github-dark.min.css" />
+</head>
+<body>
+  <header>
+    <h1>shotcode</h1>
+    <p class="tagline">Drop a screenshot of code. Get clean, copy-pasteable text.</p>
+  </header>
+
+  <main>
+    <section id="dropzone" class="dropzone" tabindex="0" aria-label="Drop image, click to upload, or paste with Ctrl+V">
+      <div class="dropzone-inner">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <circle cx="9" cy="9" r="2" />
+          <path d="m21 15-4.586-4.586a2 2 0 0 0-2.828 0L3 21" />
+        </svg>
+        <p><strong>Drop an image</strong>, click to choose, or paste with <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+        <p class="hint">PNG, JPG, WebP — runs entirely in your browser</p>
+        <input type="file" id="file-input" accept="image/*" hidden />
+      </div>
+    </section>
+
+    <section id="preview-section" class="hidden" aria-live="polite">
+      <div class="preview-row">
+        <img id="preview-img" alt="Uploaded screenshot preview" />
+        <div class="controls">
+          <label for="lang-select">Language</label>
+          <select id="lang-select">
+            <option value="auto">auto-detect</option>
+            <option value="python">Python</option>
+            <option value="javascript">JavaScript</option>
+            <option value="typescript">TypeScript</option>
+            <option value="bash">Bash / Shell</option>
+            <option value="go">Go</option>
+            <option value="rust">Rust</option>
+            <option value="java">Java</option>
+            <option value="c">C</option>
+            <option value="cpp">C++</option>
+            <option value="csharp">C#</option>
+            <option value="ruby">Ruby</option>
+            <option value="php">PHP</option>
+            <option value="sql">SQL</option>
+            <option value="html">HTML</option>
+            <option value="css">CSS</option>
+            <option value="json">JSON</option>
+            <option value="yaml">YAML</option>
+            <option value="markdown">Markdown</option>
+            <option value="plaintext">plain text</option>
+          </select>
+          <button id="rerun-btn" type="button">Re-run OCR</button>
+          <button id="reset-btn" type="button" class="secondary">Clear</button>
+        </div>
+      </div>
+
+      <div id="progress-wrap" class="progress-wrap hidden">
+        <div class="progress-bar"><div id="progress-fill"></div></div>
+        <p id="progress-text" class="progress-text">Initializing OCR…</p>
+      </div>
+
+      <div id="output-wrap" class="output-wrap hidden">
+        <div class="output-header">
+          <span id="detected-lang" class="lang-badge">—</span>
+          <button id="copy-btn" type="button">Copy</button>
+        </div>
+        <pre><code id="output" class="hljs"></code></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      Built with
+      <a href="https://github.com/naptha/tesseract.js" target="_blank" rel="noopener">tesseract.js</a>
+      and
+      <a href="https://github.com/highlightjs/highlight.js" target="_blank" rel="noopener">highlight.js</a>.
+      No images leave your browser.
+    </p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.10.0/build/highlight.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
