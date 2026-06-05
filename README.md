@@ -31,10 +31,13 @@ Then open <http://localhost:8000>. Paste a screenshot with Ctrl+V, drag a select
   - strip leading line numbers (auto-detected)
   - strip Python `>>>`/`...` or shell `$`/`#` prompts (auto-detected, language-aware)
   - normalize indentation (tabs → spaces, strip common leading whitespace)
+  - **repair indentation from brace depth** (string- and comment-aware brace-walk; best for JS/TS/Java/C/C++/C#/Go/Rust/JSON/CSS/PHP — off by default)
 
 **Verification**
 - Per-word confidence underlines in Review view (wavy amber for &lt;70%, wavy red for &lt;50%)
+- Inline Unicode confusable marks (Cyrillic/Greek look-alikes that resemble Latin letters) with a tooltip showing the suggested replacement
 - Structured warnings for unbalanced brackets / braces / parens / quotes — with line:column and a "jump" button
+- Indent-repair warnings when the brace walk ends with unclosed or extra closers
 - Cancel a slow OCR run and retry with a different preset; low-confidence results suggest alternatives automatically
 
 **Output**
@@ -76,8 +79,8 @@ Then open <http://localhost:8000>. Paste a screenshot with Ctrl+V, drag a select
 
 - [ ] PWA / offline support (cache Tesseract WASM + traineddata)
 - [ ] Vendored-dependency option for fully self-hosted use
-- [ ] Brace-based indentation repair with diff preview
-- [ ] Char-level homoglyph and Unicode confusable flags
+- [ ] Diff preview before applying brace-based indent repair (currently applies live; off by default)
+- [ ] Contextual `l`/`1`/`I` and `0`/`O` homoglyph detection (currently only Unicode confusables)
 - [ ] Resizable crop selection (currently drag-to-redraw)
 - [ ] Multi-image batch
 - [ ] Optional, BYOK LLM cleanup — off by default, sends extracted text only, always shows a diff before applying

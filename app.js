@@ -14,6 +14,7 @@
   const cleanupLineNums = $('cleanup-line-nums');
   const cleanupPrompts = $('cleanup-prompts');
   const cleanupIndent = $('cleanup-indent');
+  const cleanupRepairBrace = $('cleanup-repair-brace');
   const presetSelect = $('preset-select');
   const presetDescription = $('preset-description');
   const rerunBtn = $('rerun-btn');
@@ -78,6 +79,7 @@
   let currentPresetId = 'auto';
   let ocrJobId = 0;            // monotonic; owns "current run"
   let ocrRunning = false;
+  let lastRepairWarnings = []; // surfaced by brace-walk; merged into buildWarnings()
 
   const LANG_TO_EXT = {
     python: 'py', javascript: 'js', typescript: 'ts', bash: 'sh',
@@ -588,6 +590,25 @@
     if (cleanupLineNums.checked)  text = stripLineNumbers(text);
     if (cleanupPrompts.checked)   text = stripPrompts(text, langSelect.value);
     if (cleanupIndent.checked)    text = normalizeIndent(text);
+
+    lastRepairWarnings = [];
+    if (cleanupRepairBrace.checked) {
+      const r = repairBraceIndent(text);
+      text = r.text;
+      if (r.mismatched) {
+        lastRepairWarnings.push({
+          severity: 'warn', code: 'repair-mismatch', source: 'cleanup',
+          message: 'Indent repair saw extra closing brackets/braces — output may be wrong',
+        });
+      }
+      if (r.finalDepth > 0) {
+        lastRepairWarnings.push({
+          severity: 'warn', code: 'repair-unclosed', source: 'cleanup',
+          message: `Indent repair ended ${r.finalDepth} bracket/brace deep — output may be wrong`,
+        });
+      }
+    }
+
     text = finalTrim(text);
 
     currentText = text;
@@ -663,6 +684,63 @@
     out = out.replace(/\n{3,}/g, '\n\n');
     out = out.replace(/^\s*\n+/, '').replace(/\s+$/, '\n');
     return out;
+  }
+
+  // Re-indent text based on bracket depth. String- and comment-aware so that
+  // braces inside literals/comments don't move the cursor.
+  // Returns { text, finalDepth, mismatched, maxDepth }.
+  function repairBraceIndent(text, unit = '    ') {
+    const lines = text.split('\n');
+    const out = [];
+    let depth = 0, maxDepth = 0;
+    let inStr = null, inBlockCm = false, escaped = false;
+    let mismatched = false;
+
+    for (const rawLine of lines) {
+      const stripped = rawLine.replace(/^[ \t]+/, '');
+
+      // Preserve blank lines as empty, but still walk continued block-comment state
+      if (stripped.length === 0) {
+        out.push('');
+        continue;
+      }
+
+      const firstChar = stripped[0];
+      const leadCloser = !inStr && !inBlockCm &&
+        (firstChar === '}' || firstChar === ']' || firstChar === ')');
+      const indentDepth = Math.max(0, depth - (leadCloser ? 1 : 0));
+      out.push(unit.repeat(indentDepth) + stripped);
+
+      // Walk this line; line-comment state resets at newline
+      let inLineCm = false;
+      for (let i = 0; i < stripped.length; i++) {
+        const c = stripped[i];
+        const n = stripped[i + 1];
+        if (escaped) { escaped = false; continue; }
+        if (inLineCm) break;
+        if (inBlockCm) {
+          if (c === '*' && n === '/') { inBlockCm = false; i++; }
+          continue;
+        }
+        if (inStr) {
+          if (c === '\\') { escaped = true; continue; }
+          if (c === inStr) inStr = null;
+          continue;
+        }
+        if (c === '/' && n === '/') { inLineCm = true; break; }
+        if (c === '/' && n === '*') { inBlockCm = true; i++; continue; }
+        if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+        if (c === '(' || c === '[' || c === '{') {
+          depth++;
+          if (depth > maxDepth) maxDepth = depth;
+        } else if (c === ')' || c === ']' || c === '}') {
+          depth--;
+          if (depth < 0) { mismatched = true; depth = 0; }
+        }
+      }
+    }
+
+    return { text: out.join('\n'), finalDepth: depth, mismatched, maxDepth };
   }
 
   // ============================================================
@@ -758,7 +836,7 @@
   }
 
   function buildWarnings(text) {
-    const all = [...scanBalance(text), ...scanCleanupResidue(text)];
+    const all = [...scanBalance(text), ...scanCleanupResidue(text), ...lastRepairWarnings];
     const sevOrder = { error: 0, warn: 1, info: 2 };
     return all.sort((a, b) => {
       const s = sevOrder[a.severity] - sevOrder[b.severity];
@@ -881,6 +959,57 @@
     confidenceEl.classList.add(c >= 85 ? 'high' : c >= 65 ? 'mid' : 'low');
   }
 
+  // Cyrillic / Greek characters that look like Latin letters. Tesseract
+  // occasionally emits these when a screenshot has the wrong typeface or
+  // when the source actually contained a homoglyph attack. Always worth a flag.
+  const UNICODE_CONFUSABLES = {
+    // Cyrillic lowercase → Latin
+    'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'х': 'x', 'у': 'y',
+    'і': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'һ': 'h',
+    // Cyrillic uppercase → Latin
+    'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M',
+    'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X',
+    'Ѕ': 'S', 'Ј': 'J', 'І': 'I',
+    // Greek lowercase → Latin
+    'α': 'a', 'ο': 'o', 'ρ': 'p', 'ν': 'v',
+    // Greek uppercase → Latin
+    'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Η': 'H', 'Ι': 'I', 'Κ': 'K',
+    'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y',
+    'Χ': 'X', 'Ζ': 'Z',
+  };
+
+  function findConfusables(text) {
+    const out = [];
+    for (let i = 0; i < text.length; i++) {
+      const suggestion = UNICODE_CONFUSABLES[text[i]];
+      if (suggestion) out.push({ idx: i, char: text[i], suggestion });
+    }
+    return out;
+  }
+
+  function appendWordText(parent, text) {
+    const flags = findConfusables(text);
+    if (!flags.length) {
+      parent.appendChild(document.createTextNode(text));
+      return;
+    }
+    let last = 0;
+    for (const f of flags) {
+      if (f.idx > last) {
+        parent.appendChild(document.createTextNode(text.slice(last, f.idx)));
+      }
+      const charSpan = document.createElement('span');
+      charSpan.className = 'char-flag';
+      charSpan.textContent = f.char;
+      charSpan.title = `Confusable character — looks like Latin '${f.suggestion}'`;
+      parent.appendChild(charSpan);
+      last = f.idx + 1;
+    }
+    if (last < text.length) {
+      parent.appendChild(document.createTextNode(text.slice(last)));
+    }
+  }
+
   function renderReviewView() {
     reviewView.innerHTML = '';
     if (!rawWords.length) {
@@ -902,8 +1031,8 @@
         frag.appendChild(document.createTextNode(' '));
       }
       const span = document.createElement('span');
-      span.textContent = w.text;
       span.className = 'word';
+      appendWordText(span, w.text);
       const conf = w.confidence ?? 100;
       if (conf < 50) span.classList.add('very-low-conf');
       else if (conf < 70) span.classList.add('low-conf');
@@ -959,7 +1088,7 @@
   // ============================================================
   langSelect.addEventListener('change', () => { if (rawText) reapplyCleanup(); });
 
-  [cleanupNormalize, cleanupLineNums, cleanupPrompts, cleanupIndent].forEach((el) =>
+  [cleanupNormalize, cleanupLineNums, cleanupPrompts, cleanupIndent, cleanupRepairBrace].forEach((el) =>
     el.addEventListener('change', () => { if (rawText) reapplyCleanup(); })
   );
 

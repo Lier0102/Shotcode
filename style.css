@@ -689,6 +689,16 @@ kbd {
 
 .review-view .word:hover { background: var(--accent-tint); cursor: help; }
 
+.review-view .char-flag {
+  background: rgba(248, 81, 73, 0.18);
+  color: #ffb3ae;
+  border-radius: 2px;
+  padding: 0 1px;
+  text-decoration: underline dotted var(--danger);
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
 .hidden { display: none !important; }
 
 footer {
