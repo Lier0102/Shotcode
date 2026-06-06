@@ -1,3 +1,11 @@
+import {
+  normalizeChars, stripLineNumbers, stripPrompts, normalizeIndent, finalTrim,
+} from './js/cleanup.js';
+import { repairBraceIndent, shouldRepairBrace } from './js/repair.js';
+import {
+  scanBalance, scanCleanupResidue, findConfusables, scanPythonIndentLoss,
+} from './js/verify.js';
+
 (() => {
   // ============================================================
   //  DOM refs
@@ -592,7 +600,11 @@
     if (cleanupIndent.checked)    text = normalizeIndent(text);
 
     lastRepairWarnings = [];
-    if (cleanupRepairBrace.checked) {
+    // Runtime guard: even if the chip is somehow checked while the selected
+    // language is whitespace-sensitive (Python, YAML, ...), do not run the
+    // brace walk — it would silently flatten or mangle the indentation.
+    const effectiveLangForRepair = langSelect.value;
+    if (cleanupRepairBrace.checked && shouldRepairBrace(effectiveLangForRepair)) {
       const r = repairBraceIndent(text);
       text = r.text;
       if (r.mismatched) {
@@ -619,224 +631,27 @@
     if (isEditing) editArea.value = currentText;
   }
 
-  function normalizeChars(text) {
-    let out = text;
-    out = out.replace(/[‘’‚‛′]/g, "'");
-    out = out.replace(/[“”„‟″]/g, '"');
-    out = out.replace(/[–—−]/g, '-');
-    out = out.replace(/…/g, '...');
-    out = out.replace(/ /g, ' ');                  // NBSP
-    out = out.replace(/[​-‍﻿]/g, '');              // zero-width
-    out = out.replace(/\f/g, '');
-    out = out.replace(/ﬀ/g, 'ff').replace(/ﬁ/g, 'fi').replace(/ﬂ/g, 'fl');
-    return out;
-  }
-
-  function stripLineNumbers(text) {
-    const lines = text.split('\n');
-    const nonEmpty = lines.filter(l => l.trim().length > 0);
-    if (nonEmpty.length < 3) return text;
-    const re = /^\s*\d{1,5}[\s:|.\)]\s+/;
-    const matched = nonEmpty.filter(l => re.test(l)).length;
-    if (matched < Math.max(3, nonEmpty.length * 0.6)) return text;
-    return lines.map(l => l.replace(re, '')).join('\n');
-  }
-
-  function stripPrompts(text, lang) {
-    const lines = text.split('\n');
-    const pyRe = /^\s*(>>>|\.\.\.) ?/;
-    const shRe = /^\s*[\$#] /;
-    let py = 0, sh = 0;
-    for (const l of lines) {
-      if (pyRe.test(l)) py++;
-      if (shRe.test(l)) sh++;
-    }
-    const favorsPy = lang === 'python';
-    const favorsSh = lang === 'bash';
-    if ((py >= 2 || favorsPy) && py >= sh) {
-      return lines.map(l => l.replace(pyRe, '')).join('\n');
-    }
-    if (sh >= 2 || favorsSh) {
-      return lines.map(l => l.replace(shRe, '')).join('\n');
-    }
-    return text;
-  }
-
-  function normalizeIndent(text) {
-    let out = text.replace(/\t/g, '    ');
-    const lines = out.split('\n');
-    const nonEmpty = lines.filter(l => l.trim().length > 0);
-    if (!nonEmpty.length) return out;
-    let minLead = Infinity;
-    for (const l of nonEmpty) {
-      const m = l.match(/^( *)/);
-      if (m) minLead = Math.min(minLead, m[1].length);
-    }
-    if (minLead > 0 && minLead !== Infinity) {
-      const prefix = ' '.repeat(minLead);
-      out = lines.map(l => l.startsWith(prefix) ? l.slice(minLead) : l).join('\n');
-    }
-    return out;
-  }
-
-  function finalTrim(text) {
-    let out = text.split('\n').map(l => l.replace(/[ \t]+$/, '')).join('\n');
-    out = out.replace(/\n{3,}/g, '\n\n');
-    out = out.replace(/^\s*\n+/, '').replace(/\s+$/, '\n');
-    return out;
-  }
-
-  // Re-indent text based on bracket depth. String- and comment-aware so that
-  // braces inside literals/comments don't move the cursor.
-  // Returns { text, finalDepth, mismatched, maxDepth }.
-  function repairBraceIndent(text, unit = '    ') {
-    const lines = text.split('\n');
-    const out = [];
-    let depth = 0, maxDepth = 0;
-    let inStr = null, inBlockCm = false, escaped = false;
-    let mismatched = false;
-
-    for (const rawLine of lines) {
-      const stripped = rawLine.replace(/^[ \t]+/, '');
-
-      // Preserve blank lines as empty, but still walk continued block-comment state
-      if (stripped.length === 0) {
-        out.push('');
-        continue;
-      }
-
-      const firstChar = stripped[0];
-      const leadCloser = !inStr && !inBlockCm &&
-        (firstChar === '}' || firstChar === ']' || firstChar === ')');
-      const indentDepth = Math.max(0, depth - (leadCloser ? 1 : 0));
-      out.push(unit.repeat(indentDepth) + stripped);
-
-      // Walk this line; line-comment state resets at newline
-      let inLineCm = false;
-      for (let i = 0; i < stripped.length; i++) {
-        const c = stripped[i];
-        const n = stripped[i + 1];
-        if (escaped) { escaped = false; continue; }
-        if (inLineCm) break;
-        if (inBlockCm) {
-          if (c === '*' && n === '/') { inBlockCm = false; i++; }
-          continue;
-        }
-        if (inStr) {
-          if (c === '\\') { escaped = true; continue; }
-          if (c === inStr) inStr = null;
-          continue;
-        }
-        if (c === '/' && n === '/') { inLineCm = true; break; }
-        if (c === '/' && n === '*') { inBlockCm = true; i++; continue; }
-        if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
-        if (c === '(' || c === '[' || c === '{') {
-          depth++;
-          if (depth > maxDepth) maxDepth = depth;
-        } else if (c === ')' || c === ']' || c === '}') {
-          depth--;
-          if (depth < 0) { mismatched = true; depth = 0; }
-        }
-      }
-    }
-
-    return { text: out.join('\n'), finalDepth: depth, mismatched, maxDepth };
-  }
+  // Cleanup pipeline functions live in js/cleanup.js and js/repair.js
+  // and are imported at the top of this file.
 
   // ============================================================
   //  Warnings (structured)
   // ============================================================
-  // Returns Warning[] from a single string-and-comment-aware walk over the text.
-  function scanBalance(text) {
-    const stack = [];
-    const warns = [];
-    let line = 1, col = 1;
-    let inStr = null;        // { ch, line, col } | null
-    let lineCm = false, blockCm = false, escaped = false;
+  // scanBalance / scanCleanupResidue live in js/verify.js (imported above).
 
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      const n = text[i + 1];
-
-      if (c === '\n') { line++; col = 1; lineCm = false; continue; }
-      if (escaped)    { escaped = false; col++; continue; }
-      if (lineCm)     { col++; continue; }
-      if (blockCm) {
-        if (c === '*' && n === '/') { blockCm = false; col += 2; i++; continue; }
-        col++; continue;
-      }
-      if (inStr) {
-        if (c === '\\') { escaped = true; col++; continue; }
-        if (c === inStr.ch) { inStr = null; col++; continue; }
-        col++; continue;
-      }
-      if (c === '/' && n === '/') { lineCm  = true; col += 2; i++; continue; }
-      if (c === '/' && n === '*') { blockCm = true; col += 2; i++; continue; }
-      if (c === '"' || c === "'" || c === '`') {
-        inStr = { ch: c, line, col }; col++; continue;
-      }
-      if (c === '(' || c === '[' || c === '{') {
-        stack.push({ ch: c, line, col });
-      } else if (c === ')' || c === ']' || c === '}') {
-        const expected = c === ')' ? '(' : c === ']' ? '[' : '{';
-        const top = stack[stack.length - 1];
-        if (!top) {
-          warns.push({
-            severity: 'error', code: 'extra-close', source: 'balance',
-            message: `Extra '${c}' with no matching opener`,
-            position: { line, col, length: 1 },
-          });
-        } else if (top.ch !== expected) {
-          warns.push({
-            severity: 'error', code: 'mismatch', source: 'balance',
-            message: `'${c}' does not match '${top.ch}' opened earlier`,
-            position: { line, col, length: 1 },
-            related: { line: top.line, col: top.col },
-          });
-          stack.pop();
-        } else {
-          stack.pop();
-        }
-      }
-      col++;
-    }
-
-    if (inStr) {
-      warns.push({
-        severity: 'warn', code: 'unterminated-string', source: 'balance',
-        message: `Unterminated ${inStr.ch === '`' ? 'template' : 'string'} literal opened with ${inStr.ch}`,
-        position: { line: inStr.line, col: inStr.col, length: 1 },
-      });
-    }
-    for (const top of stack) {
-      warns.push({
-        severity: 'warn', code: 'unclosed', source: 'balance',
-        message: `Unclosed '${top.ch}'`,
-        position: { line: top.line, col: top.col, length: 1 },
-      });
-    }
-    return warns;
-  }
-
-  function scanCleanupResidue(text) {
-    const warns = [];
-    if (/[‘’“”]/.test(text)) {
-      warns.push({
-        severity: 'info', code: 'smart-quote-residue', source: 'cleanup',
-        message: 'Smart quotes still present — toggle "Normalize chars" or edit manually',
-      });
-    }
-    if (/[–—]/.test(text)) {
-      warns.push({
-        severity: 'info', code: 'dash-residue', source: 'cleanup',
-        message: 'En/em dashes still present — usually `-` in code',
-      });
-    }
-    return warns;
+  function effectiveLang() {
+    return langSelect.value === 'auto'
+      ? (detectedLangEl.dataset.lang || 'auto')
+      : langSelect.value;
   }
 
   function buildWarnings(text) {
-    const all = [...scanBalance(text), ...scanCleanupResidue(text), ...lastRepairWarnings];
+    const all = [
+      ...scanBalance(text),
+      ...scanCleanupResidue(text),
+      ...scanPythonIndentLoss(text, effectiveLang()),
+      ...lastRepairWarnings,
+    ];
     const sevOrder = { error: 0, warn: 1, info: 2 };
     return all.sort((a, b) => {
       const s = sevOrder[a.severity] - sevOrder[b.severity];
@@ -959,33 +774,7 @@
     confidenceEl.classList.add(c >= 85 ? 'high' : c >= 65 ? 'mid' : 'low');
   }
 
-  // Cyrillic / Greek characters that look like Latin letters. Tesseract
-  // occasionally emits these when a screenshot has the wrong typeface or
-  // when the source actually contained a homoglyph attack. Always worth a flag.
-  const UNICODE_CONFUSABLES = {
-    // Cyrillic lowercase → Latin
-    'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'х': 'x', 'у': 'y',
-    'і': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'һ': 'h',
-    // Cyrillic uppercase → Latin
-    'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M',
-    'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X',
-    'Ѕ': 'S', 'Ј': 'J', 'І': 'I',
-    // Greek lowercase → Latin
-    'α': 'a', 'ο': 'o', 'ρ': 'p', 'ν': 'v',
-    // Greek uppercase → Latin
-    'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Η': 'H', 'Ι': 'I', 'Κ': 'K',
-    'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y',
-    'Χ': 'X', 'Ζ': 'Z',
-  };
-
-  function findConfusables(text) {
-    const out = [];
-    for (let i = 0; i < text.length; i++) {
-      const suggestion = UNICODE_CONFUSABLES[text[i]];
-      if (suggestion) out.push({ idx: i, char: text[i], suggestion });
-    }
-    return out;
-  }
+  // UNICODE_CONFUSABLES and findConfusables live in js/verify.js (imported above).
 
   function appendWordText(parent, text) {
     const flags = findConfusables(text);
@@ -1086,7 +875,30 @@
   // ============================================================
   //  Wiring
   // ============================================================
-  langSelect.addEventListener('change', () => { if (rawText) reapplyCleanup(); });
+  // Keep the brace-repair chip in sync with the selected language: disable
+  // (and auto-uncheck) when the language is whitespace-sensitive so users
+  // don't get silently flattened output. Updates the chip's tooltip too.
+  function syncBraceRepairAvailability() {
+    const available = shouldRepairBrace(langSelect.value);
+    const wasChecked = cleanupRepairBrace.checked;
+    cleanupRepairBrace.disabled = !available;
+    const label = cleanupRepairBrace.closest('.chip');
+    if (label) {
+      label.classList.toggle('chip-disabled', !available);
+      label.title = available
+        ? 'Re-indent based on { } [ ] ( ) depth. String- and comment-aware.'
+        : 'Brace repair is unavailable for whitespace-sensitive languages like Python. ' +
+          'Pick a brace-style language (JS, TS, Java, C, C++, C#, Go, Rust, JSON, CSS, PHP) to enable.';
+    }
+    if (!available && wasChecked) {
+      cleanupRepairBrace.checked = false;
+    }
+  }
+
+  langSelect.addEventListener('change', () => {
+    syncBraceRepairAvailability();
+    if (rawText) reapplyCleanup();
+  });
 
   [cleanupNormalize, cleanupLineNums, cleanupPrompts, cleanupIndent, cleanupRepairBrace].forEach((el) =>
     el.addEventListener('change', () => { if (rawText) reapplyCleanup(); })
@@ -1173,4 +985,5 @@
   //  Init
   // ============================================================
   populatePresetSelect();
+  syncBraceRepairAvailability();
 })();

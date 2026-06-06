@@ -231,6 +231,20 @@ kbd {
   background: var(--accent-tint);
 }
 
+.chip.chip-disabled,
+.chip:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--border);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+}
+
+.chip.chip-disabled input,
+.chip:has(input:disabled) input {
+  cursor: not-allowed;
+}
+
 /* ---------- Preset dropdown ---------- */
 .preset-description {
   font-size: 0.75rem;

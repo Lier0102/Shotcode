@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>shotcode — regression tests</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --bg-elev: #161b22;
+      --bg-elev-2: #1c2129;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-dim: #8b949e;
+      --pass: #3fb950;
+      --fail: #f85149;
+      --error: #d29922;
+      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 2rem 1rem;
+      background: var(--bg); color: var(--text);
+      font-family: var(--font-sans); line-height: 1.5;
+    }
+    main { max-width: 960px; margin: 0 auto; }
+    h1 {
+      margin: 0 0 0.5rem; font-size: 1.6rem; letter-spacing: -0.01em;
+    }
+    .subtitle { margin: 0 0 1.5rem; color: var(--text-dim); font-size: 0.9rem; }
+    .subtitle a { color: var(--text); }
+
+    .summary {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 1rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-elev);
+      margin-bottom: 1.5rem;
+    }
+    .summary.ok    { border-color: var(--pass); }
+    .summary.bad   { border-color: var(--fail); }
+    .summary .big { font-size: 1.15rem; font-weight: 600; }
+    .summary.ok .big  { color: var(--pass); }
+    .summary.bad .big { color: var(--fail); }
+    .pill {
+      padding: 0.15rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+    }
+    .pill-fail  { background: rgba(248, 81, 73, 0.15); color: var(--fail); }
+    .pill-error { background: rgba(210, 153, 34, 0.15); color: var(--error); }
+
+    .group {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 1rem;
+      overflow: hidden;
+    }
+    .group h2 {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin: 0;
+      padding: 0.6rem 1rem;
+      font-size: 0.95rem;
+      background: var(--bg-elev-2);
+      border-bottom: 1px solid var(--border);
+    }
+    .group-name { flex: 1; }
+    .group-count {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+    .group ul { list-style: none; margin: 0; padding: 0.4rem 0; }
+
+    .case {
+      padding: 0.3rem 1rem;
+      font-size: 0.875rem;
+      border-left: 3px solid transparent;
+    }
+    .case-header { display: flex; gap: 0.6rem; align-items: baseline; }
+    .case .icon { width: 1.2em; font-family: var(--font-mono); font-weight: 700; }
+    .case .name { flex: 1; }
+    .case.pass  { border-color: var(--pass); color: var(--text-dim); }
+    .case.pass .icon  { color: var(--pass); }
+    .case.fail  { border-color: var(--fail); background: rgba(248, 81, 73, 0.04); }
+    .case.fail .icon  { color: var(--fail); }
+    .case.fail .name  { color: var(--text); }
+    .case.error { border-color: var(--error); background: rgba(210, 153, 34, 0.04); }
+    .case.error .icon { color: var(--error); }
+
+    details { margin-top: 0.4rem; margin-left: 1.8em; }
+    summary { cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem; color: var(--fail); }
+    .case.error summary { color: var(--error); }
+
+    .diff-row {
+      display: grid;
+      grid-template-columns: 5em minmax(0, 1fr);
+      gap: 0.4rem;
+      align-items: start;
+      margin: 0.3rem 0;
+    }
+    .diff-label {
+      font-family: var(--font-mono); font-size: 0.75rem;
+      color: var(--text-dim); padding-top: 0.4rem;
+    }
+    .diff-value {
+      margin: 0;
+      padding: 0.4rem 0.6rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: var(--font-mono); font-size: 0.78rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 200px;
+      overflow: auto;
+    }
+    pre.stack {
+      margin: 0.4rem 0 0;
+      padding: 0.6rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: var(--font-mono); font-size: 0.75rem;
+      white-space: pre-wrap;
+      color: var(--text-dim);
+      max-height: 220px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>shotcode — regression tests</h1>
+    <p class="subtitle">
+      Pre-OCR text fixtures only — actual screenshot regression is future work.
+      Detailed failures also appear in the browser console.
+      <a href="../index.html">Back to app</a>
+    </p>
+    <div id="results">Loading…</div>
+  </main>
+  <script type="module" src="runner.js"></script>
+</body>
+</html>
