@@ -39,6 +39,7 @@ Then open <http://localhost:8000>. Paste a screenshot with Ctrl+V, drag a select
 - Structured warnings for unbalanced brackets / braces / parens / quotes — with line:column and a "jump" button
 - Indent-repair warnings when the brace walk ends with unclosed or extra closers
 - **Python indent-loss warning** when the selected language is `python` and the OCR output looks flattened (multiple `:` headers followed immediately by unindented lines) — independent of OCR confidence, since text can read as high-confidence and still be semantically broken
+- **Visual indentation recovery (experimental)** for Python and other whitespace-sensitive languages. When the language is `python`, a **Recover indent** button appears that proposes leading whitespace reconstructed from the x-coordinates of OCR word bounding boxes. **It never auto-applies**: a diff modal shows the before/after side-by-side with per-line confidence, and you click Apply to accept. Read the [Visual indent recovery](#visual-indent-recovery-experimental) section below before relying on it.
 - Cancel a slow OCR run and retry with a different preset; low-confidence results suggest alternatives automatically
 
 **Output**
@@ -101,9 +102,44 @@ Test groups covered:
   hex/scientific/decimal whitelisting, Cyrillic confusables
 - G. `findConfusables` — the per-word helper used by the Review view
 - H. `finalTrim` — blank-line collapsing and trailing whitespace
+- I. brace-repair language gate — `shouldRepairBrace` true/false for known languages
+- J. Python indent-loss detector — the heuristic warning, not a fixer
+- K. brace repair stays language-agnostic — the gate is the policy
+- L. visual indent recovery — `proposeVisualIndentation`, `groupWordsIntoVisualLines`, `estimateBaseX`, `estimateCharWidth`
 
 If you add a cleanup rule or repair heuristic, add a fixture to `tests/cases.js`
 in the same shape and reload the runner.
+
+## Visual indent recovery (experimental)
+
+Python (and YAML / Makefile / Haskell / F# in general) lose their meaning when leading whitespace is dropped. Tesseract often reads the characters correctly but throws away the whitespace, so a 95%-confidence OCR result can still be semantically broken.
+
+shotcode's **Recover indent** button doesn't guess indentation from Python syntax. It uses the x-coordinates of OCR word bounding boxes:
+
+1. Group words into visual lines by y-center proximity.
+2. Estimate the page's left margin from the 10th percentile of `firstWord.x0`.
+3. Estimate the monospace character width from the median of `bbox.width / text.length` across confident multi-character tokens.
+4. For each line, convert `firstWord.x0 - baseX` into a count of indent units (default 4 spaces). Track per-line confidence as a function of how close that raw offset was to a clean multiple.
+5. Rebuild each line with the new leading whitespace — never touching internal characters.
+
+The result is displayed as a side-by-side diff with per-line confidence. **Nothing changes until you click Apply.** Multiple warning signals are surfaced before that:
+
+- too few visual lines
+- character width could not be estimated
+- ≥30% of lines had ambiguous x-offsets
+- implausible indent jumps (>2 levels in one step)
+- (Python) colon-terminated lines followed by same-or-shallower indentation
+
+Honest framing the UI sticks to:
+
+- The output is called a **proposal**, never a "fix" or "correct version".
+- The dialog reminds you to *review every line* before applying.
+- Even after applying, the standard warning system continues to run on the new text.
+
+Known limits:
+- The algorithm assumes monospace input. Proportional fonts will produce garbage estimates.
+- After applying, the cleanup chips re-run from the indented text (not the original OCR). If you wanted a different cleanup combination, toggle the chips before opening the recover modal.
+- The "no auto-apply" guarantee only holds if you don't click Apply. There is no automatic mode.
 
 ## Deploy to GitHub Pages
 

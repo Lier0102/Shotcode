@@ -5,6 +5,10 @@ import { repairBraceIndent, shouldRepairBrace } from './js/repair.js';
 import {
   scanBalance, scanCleanupResidue, findConfusables, scanPythonIndentLoss,
 } from './js/verify.js';
+import { proposeVisualIndentation } from './js/visual-indent.js';
+
+// Languages whose indentation is structural and where visual recovery is offered
+const WHITESPACE_SENSITIVE_LANGS = new Set(['python', 'yaml', 'makefile']);
 
 (() => {
   // ============================================================
@@ -65,6 +69,16 @@ import {
   const editBtn = $('edit-btn');
   const downloadBtn = $('download-btn');
   const copyBtn = $('copy-btn');
+  const recoverIndentBtn = $('recover-indent-btn');
+
+  const recoverModal = $('recover-modal');
+  const recoverBackdrop = $('recover-backdrop');
+  const recoverWarningsEl = $('recover-warnings');
+  const recoverMetricsEl = $('recover-metrics');
+  const recoverDiffEl = $('recover-diff');
+  const recoverApplyBtn = $('recover-apply');
+  const recoverCancelBtn = $('recover-cancel');
+  const recoverCloseBtn = $('recover-close');
 
   // ============================================================
   //  State
@@ -88,6 +102,7 @@ import {
   let ocrJobId = 0;            // monotonic; owns "current run"
   let ocrRunning = false;
   let lastRepairWarnings = []; // surfaced by brace-walk; merged into buildWarnings()
+  let pendingProposal = null;  // currently-displayed visual-indent proposal
 
   const LANG_TO_EXT = {
     python: 'py', javascript: 'js', typescript: 'ts', bash: 'sh',
@@ -484,6 +499,7 @@ import {
     progressFill.style.width = '0%';
     progressText.textContent = 'Initializing OCR…';
     rerunBtn.disabled = true;
+    updateRecoverButtonVisibility();
 
     try {
       if (!worker) await initWorker();
@@ -513,6 +529,7 @@ import {
       if (job === ocrJobId) {
         ocrRunning = false;
         rerunBtn.disabled = false;
+        updateRecoverButtonVisibility();
       }
     }
   }
@@ -528,6 +545,7 @@ import {
     }
     progressWrap.classList.add('hidden');
     rerunBtn.disabled = false;
+    updateRecoverButtonVisibility();
     suggestRetry('cancel');
   }
 
@@ -629,6 +647,7 @@ import {
     renderWarnings(buildWarnings(currentText));
     if (isReview) renderReviewView();
     if (isEditing) editArea.value = currentText;
+    updateRecoverButtonVisibility();
   }
 
   // Cleanup pipeline functions live in js/cleanup.js and js/repair.js
@@ -897,7 +916,139 @@ import {
 
   langSelect.addEventListener('change', () => {
     syncBraceRepairAvailability();
+    updateRecoverButtonVisibility();
     if (rawText) reapplyCleanup();
+  });
+
+  // ============================================================
+  //  Visual indent recovery (experimental)
+  // ============================================================
+  function updateRecoverButtonVisibility() {
+    const lang = effectiveLang();
+    const show = WHITESPACE_SENSITIVE_LANGS.has(lang) && rawText.length > 0 && !ocrRunning;
+    recoverIndentBtn.hidden = !show;
+  }
+
+  function isRecoverModalOpen() {
+    return !recoverModal.classList.contains('hidden');
+  }
+
+  function openRecoverModal() {
+    if (!rawWords.length) {
+      alert('No OCR word data available — bbox-based indent recovery cannot run.');
+      return;
+    }
+    const proposal = proposeVisualIndentation({
+      words: rawWords,
+      rawText,
+      language: effectiveLang(),
+      indentUnit: 4,
+    });
+    pendingProposal = proposal;
+    renderRecoverModal(proposal);
+    recoverBackdrop.classList.remove('hidden');
+    recoverModal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    // Move focus into the modal so Escape and Tab behave naturally
+    recoverCancelBtn.focus();
+  }
+
+  function closeRecoverModal() {
+    pendingProposal = null;
+    recoverBackdrop.classList.add('hidden');
+    recoverModal.classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+
+  function applyPendingProposal() {
+    if (!pendingProposal) { closeRecoverModal(); return; }
+    rawText = pendingProposal.text;
+    closeRecoverModal();
+    reapplyCleanup();
+  }
+
+  function renderRecoverModal(proposal) {
+    // Metrics row
+    const m = proposal.metrics;
+    recoverMetricsEl.replaceChildren();
+    const fields = [
+      ['base x', `${m.baseX.toFixed(1)}px`],
+      ['char width', m.charWidth > 0 ? `${m.charWidth.toFixed(2)}px` : 'n/a'],
+      ['indent unit', `${m.indentUnit} spaces`],
+      ['visual lines', String(m.lineCount)],
+      ['uncertain', `${m.uncertainLineCount} / ${m.lineCount}`],
+    ];
+    for (const [k, v] of fields) {
+      const wrap = document.createElement('span');
+      const key = document.createElement('span'); key.className = 'm-key'; key.textContent = k + ':';
+      const val = document.createElement('span'); val.className = 'm-val'; val.textContent = ' ' + v;
+      wrap.appendChild(key); wrap.appendChild(val);
+      recoverMetricsEl.appendChild(wrap);
+    }
+
+    // Warnings list
+    recoverWarningsEl.replaceChildren();
+    for (const w of proposal.warnings) {
+      const li = document.createElement('div');
+      li.className = `warning warning-${w.severity}`;
+      const msg = document.createElement('span');
+      msg.className = 'warning-msg';
+      msg.textContent = w.message;
+      li.appendChild(msg);
+      recoverWarningsEl.appendChild(li);
+    }
+
+    // Diff table
+    const tbl = document.createElement('table');
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th>#</th><th>Original</th><th>Proposed</th><th>Conf</th></tr>';
+    tbl.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (let i = 0; i < proposal.lines.length; i++) {
+      const ln = proposal.lines[i];
+      const tr = document.createElement('tr');
+      const changed = ln.original !== ln.proposed;
+      if (changed) tr.classList.add('row-changed');
+      if (ln.original.trim().length > 0) {
+        if (ln.confidence < 50) tr.classList.add('row-very-uncertain');
+        else if (ln.confidence < 75) tr.classList.add('row-uncertain');
+      }
+      tr.title = ln.reason || '';
+      tr.innerHTML = `
+        <td class="col-num">${i + 1}</td>
+        <td class="col-orig"></td>
+        <td class="col-prop"></td>
+        <td class="col-conf">${ln.original.trim().length === 0 ? '' : ln.confidence + '%'}</td>
+      `;
+      tr.querySelector('.col-orig').textContent = ln.original;
+      tr.querySelector('.col-prop').textContent = ln.proposed;
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody);
+    recoverDiffEl.replaceChildren(tbl);
+
+    // Disable Apply if no visual lines / all empty
+    const applyOk = m.lineCount > 0 && m.charWidth > 0;
+    recoverApplyBtn.disabled = !applyOk;
+    recoverApplyBtn.title = applyOk
+      ? 'Replace OCR text with the proposed version'
+      : 'No usable visual data — proposal cannot be applied';
+  }
+
+  recoverIndentBtn.addEventListener('click', openRecoverModal);
+  recoverApplyBtn.addEventListener('click', applyPendingProposal);
+  recoverCancelBtn.addEventListener('click', closeRecoverModal);
+  recoverCloseBtn.addEventListener('click', closeRecoverModal);
+  recoverBackdrop.addEventListener('click', closeRecoverModal);
+
+  // Escape closes the modal when it's open (global listener — safe because the
+  // open state is gated by the .hidden class on the modal element).
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isRecoverModalOpen()) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeRecoverModal();
+    }
   });
 
   [cleanupNormalize, cleanupLineNums, cleanupPrompts, cleanupIndent, cleanupRepairBrace].forEach((el) =>
@@ -931,6 +1082,8 @@ import {
     outputEl.textContent = '';
     clearRetryBanner();
     setViewMode('code');
+    closeRecoverModal();
+    updateRecoverButtonVisibility();
   });
 
   // ============================================================
@@ -986,4 +1139,5 @@ import {
   // ============================================================
   populatePresetSelect();
   syncBraceRepairAvailability();
+  updateRecoverButtonVisibility();
 })();

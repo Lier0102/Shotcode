@@ -148,6 +148,10 @@
           <span id="confidence-badge" class="confidence-badge hidden">—</span>
           <div class="spacer"></div>
           <button id="view-btn" type="button" class="ghost" title="Toggle review view with low-confidence words highlighted">Review</button>
+          <button id="recover-indent-btn" type="button" class="ghost" hidden
+                  title="Propose indentation from OCR word x-positions. Shows a diff — never applies silently. Whitespace-sensitive languages only.">
+            Recover indent
+          </button>
           <button id="edit-btn" type="button" class="ghost">Edit</button>
           <button id="download-btn" type="button" class="ghost">Download</button>
           <button id="copy-btn" type="button">Copy</button>
@@ -167,6 +171,25 @@
         </div>
       </div>
     </section>
+
+    <div id="recover-backdrop" class="recover-backdrop hidden" aria-hidden="true"></div>
+    <div id="recover-modal" class="recover-modal hidden" role="dialog" aria-modal="true" aria-labelledby="recover-title">
+      <header class="recover-header">
+        <h3 id="recover-title">Proposed visual indentation</h3>
+        <button id="recover-close" type="button" class="recover-close" aria-label="Close">×</button>
+      </header>
+      <p class="recover-subtitle">
+        Indentation reconstructed from OCR word x-positions, not from Python syntax.
+        <strong>Review every line</strong> before applying — this is an estimate, not a fix.
+      </p>
+      <div id="recover-warnings" class="recover-warnings"></div>
+      <div id="recover-metrics" class="recover-metrics"></div>
+      <div id="recover-diff" class="recover-diff" tabindex="0"></div>
+      <footer class="recover-actions">
+        <button id="recover-cancel" type="button" class="secondary">Cancel</button>
+        <button id="recover-apply" type="button">Apply proposal</button>
+      </footer>
+    </div>
   </main>
 
   <footer>

@@ -8,7 +8,31 @@ import { repairBraceIndent, shouldRepairBrace, BRACE_REPAIR_LANGS } from '../js/
 import {
   scanBalance, scanCleanupResidue, findConfusables, scanHomoglyphs, scanPythonIndentLoss,
 } from '../js/verify.js';
+import {
+  proposeVisualIndentation, groupWordsIntoVisualLines, estimateBaseX, estimateCharWidth,
+} from '../js/visual-indent.js';
 import { eq, deepEq, ok, notOk, some, none, countOf } from './assert.js';
+
+// ----------------------------------------------------------------------
+//  Synthetic OCR word builder
+//
+// Monospace font assumption: 8 px per character, 16 px line height.
+// Position by *column* and *row*, not raw pixels — keeps tests readable.
+// ----------------------------------------------------------------------
+const CHAR_W = 8;
+const LINE_H = 16;
+function w(text, col, row, conf = 90) {
+  return {
+    text,
+    confidence: conf,
+    bbox: {
+      x0: col * CHAR_W,
+      y0: row * LINE_H,
+      x1: (col + text.length) * CHAR_W,
+      y1: (row + 1) * LINE_H,
+    },
+  };
+}
 
 export const cases = [
 
@@ -409,6 +433,177 @@ export const cases = [
     ok(BRACE_REPAIR_LANGS instanceof Set);
     ok(BRACE_REPAIR_LANGS.has('javascript'));
     ok(!BRACE_REPAIR_LANGS.has('python'));
+  }},
+
+  // ----------------------------------------------------------------------
+  //  L. Visual indent recovery (proposeVisualIndentation)
+  //
+  //  Each test gives synthetic Tesseract-shaped word data with bboxes and the
+  //  corresponding flattened OCR text. Asserts the proposed text reconstructs
+  //  the original visual indentation.
+  // ----------------------------------------------------------------------
+  { group: 'L. visual indent', name: 'L1 simple class/function gets 4/8-space indent', run: () => {
+    const words = [
+      w('class', 0, 0),  w('Foo:', 6, 0),
+      w('def', 4, 1),    w('bar(self):', 8, 1),
+      w('return', 8, 2), w('1', 15, 2),
+    ];
+    const rawText = 'class Foo:\ndef bar(self):\nreturn 1';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(p.text, 'class Foo:\n    def bar(self):\n        return 1');
+    eq(p.metrics.charWidth, CHAR_W);
+    eq(p.metrics.indentUnit, 4);
+  }},
+
+  { group: 'L. visual indent', name: 'L2 nested if block preserves return-to-outer-indent', run: () => {
+    const words = [
+      w('def', 0, 0),    w('foo():', 4, 0),
+      w('if', 4, 1),     w('x:', 7, 1),
+      w('return', 8, 2), w('1', 15, 2),
+      w('return', 4, 3), w('0', 11, 3),
+    ];
+    const rawText = 'def foo():\nif x:\nreturn 1\nreturn 0';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(p.text, 'def foo():\n    if x:\n        return 1\n    return 0');
+  }},
+
+  { group: 'L. visual indent', name: 'L3 decorators stay at outer indent', run: () => {
+    const words = [
+      w('@decorator', 0, 0),
+      w('def', 0, 1), w('foo():', 4, 1),
+      w('pass', 4, 2),
+    ];
+    const rawText = '@decorator\ndef foo():\npass';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(p.text, '@decorator\ndef foo():\n    pass');
+  }},
+
+  { group: 'L. visual indent', name: 'L4 blank lines preserved as blanks, do not consume visual lines', run: () => {
+    const words = [
+      w('class', 0, 0),  w('Foo:', 6, 0),
+      w('def', 4, 1),    w('bar(self):', 8, 1),
+      w('return', 8, 2), w('1', 15, 2),
+      // row 3 is blank — no words
+      w('def', 4, 4),    w('baz(self):', 8, 4),
+      w('return', 8, 5), w('2', 15, 5),
+    ];
+    const rawText = 'class Foo:\ndef bar(self):\nreturn 1\n\ndef baz(self):\nreturn 2';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(
+      p.text,
+      'class Foo:\n    def bar(self):\n        return 1\n\n    def baz(self):\n        return 2'
+    );
+  }},
+
+  { group: 'L. visual indent', name: 'L5 comments are indented like normal lines', run: () => {
+    const words = [
+      w('#', 0, 0),    w('top', 2, 0), w('comment', 6, 0),
+      w('def', 0, 1),  w('foo():', 4, 1),
+      w('#', 4, 2),    w('inside', 6, 2), w('comment', 13, 2),
+      w('pass', 4, 3),
+    ];
+    const rawText = '# top comment\ndef foo():\n# inside comment\npass';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(p.text, '# top comment\ndef foo():\n    # inside comment\n    pass');
+  }},
+
+  { group: 'L. visual indent', name: 'L6 long type annotation does not destabilize charWidth', run: () => {
+    const words = [
+      w('def', 0, 0),
+      w('foo(x:', 4, 0),
+      w('Optional[Dict[str,str]]', 11, 0),       // 23-char "word" at col 11
+      w(')', 35, 0),
+      w('pass', 4, 1),
+    ];
+    const rawText = 'def foo(x: Optional[Dict[str,str]] )\npass';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(p.metrics.charWidth, CHAR_W, 'charWidth should remain stable at 8');
+    eq(p.lines[1].leadingSpaces, 4);
+  }},
+
+  { group: 'L. visual indent', name: 'L7 noisy x position flagged as uncertain', run: () => {
+    // The 'def' word sits at x0=46 — halfway between indent levels 1 (32) and 2 (64).
+    const words = [
+      w('class', 0, 0), w('Foo:', 6, 0),
+      { text: 'def', confidence: 90, bbox: { x0: 46, y0: 16, x1: 46 + 24, y1: 32 } },
+      { text: 'bar(self):', confidence: 90, bbox: { x0: 80, y0: 16, x1: 80 + 80, y1: 32 } },
+      w('return', 8, 2), w('1', 15, 2),
+    ];
+    const rawText = 'class Foo:\ndef bar(self):\nreturn 1';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    ok(p.metrics.uncertainLineCount >= 1, 'expected at least one uncertain line');
+    // The middle line's per-line confidence should be < 50
+    const middle = p.lines.find(l => l.original.startsWith('def'));
+    ok(middle && middle.confidence < 50,
+      `middle-line confidence should be < 50, got ${middle && middle.confidence}`);
+  }},
+
+  { group: 'L. visual indent', name: 'L8 missing bbox data → no-char-width warning + zero charWidth', run: () => {
+    const words = [
+      { text: 'foo', confidence: 90 },  // no bbox
+      { text: 'bar', confidence: 90 },
+    ];
+    const p = proposeVisualIndentation({
+      words, rawText: 'foo\nbar', language: 'python',
+    });
+    some(p.warnings, x => x.code === 'visual-indent-no-char-width');
+    eq(p.metrics.charWidth, 0);
+  }},
+
+  { group: 'L. visual indent', name: 'L9 only leading whitespace changes — content preserved verbatim', run: () => {
+    const words = [
+      w('class', 0, 0),  w('Foo:', 6, 0),
+      w('def', 4, 1),    w('bar(self,', 8, 1), w('value):', 18, 1),
+      w('return', 8, 2), w('value', 15, 2),
+    ];
+    const rawText = 'class Foo:\ndef bar(self, value):\nreturn value';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    for (const ln of p.lines) {
+      eq(
+        ln.original.replace(/^[ \t]+/, ''),
+        ln.proposed.replace(/^[ \t]+/, ''),
+        `content drifted on line: ${JSON.stringify({ original: ln.original, proposed: ln.proposed })}`
+      );
+    }
+  }},
+
+  { group: 'L. visual indent', name: 'L10 empty input → empty proposal with insufficient-lines warning', run: () => {
+    const p = proposeVisualIndentation({ words: [], rawText: '', language: 'python' });
+    eq(p.text, '');
+    some(p.warnings, x => x.code === 'visual-indent-insufficient-lines');
+  }},
+
+  { group: 'L. visual indent', name: 'L11 groupWordsIntoVisualLines clusters by y-center', run: () => {
+    const lines = groupWordsIntoVisualLines([
+      w('a', 0, 0), w('b', 2, 0),
+      w('c', 0, 1),
+      w('d', 0, 5),
+    ]);
+    eq(lines.length, 3);
+    eq(lines[0].words.length, 2);
+    eq(lines[1].words[0].text, 'c');
+    eq(lines[2].words[0].text, 'd');
+  }},
+
+  { group: 'L. visual indent', name: 'L12 estimateBaseX uses 10th percentile of firstX', run: () => {
+    const lines = [
+      { firstX: 0,  words: [] }, { firstX: 32, words: [] }, { firstX: 32, words: [] },
+      { firstX: 64, words: [] }, { firstX: 64, words: [] }, { firstX: 64, words: [] },
+    ];
+    eq(estimateBaseX(lines), 0);
+  }},
+
+  { group: 'L. visual indent', name: 'L13 estimateCharWidth ignores low-confidence and short tokens', run: () => {
+    const lines = [{
+      words: [
+        w('aa', 0, 0),                              // too short
+        w('foo', 0, 0, 40),                          // low confidence
+        w('bar', 0, 0),                              // good sample
+        w('baz', 0, 0),                              // good sample
+        w('hello', 0, 0),                            // good sample
+      ],
+    }];
+    eq(estimateCharWidth(lines), CHAR_W);
   }},
 
   // ----------------------------------------------------------------------
