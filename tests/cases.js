@@ -606,6 +606,168 @@ export const cases = [
     eq(estimateCharWidth(lines), CHAR_W);
   }},
 
+  { group: 'L. visual indent', name: 'L14 async def gets the same 4-space body indent as def', run: () => {
+    const words = [
+      w('async', 0, 0),  w('def', 6, 0), w('fetch():', 10, 0),
+      w('return', 4, 1), w('await', 11, 1), w('get()', 17, 1),
+    ];
+    const rawText = 'async def fetch():\nreturn await get()';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(p.text, 'async def fetch():\n    return await get()');
+  }},
+
+  { group: 'L. visual indent', name: 'L15 multi-line def signature with hanging close paren', run: () => {
+    // def foo(
+    //     arg1,
+    //     arg2,
+    // ):
+    //     pass
+    const words = [
+      w('def', 0, 0),   w('foo(', 4, 0),
+      w('arg1,', 4, 1),
+      w('arg2,', 4, 2),
+      w('):', 0, 3),
+      w('pass', 4, 4),
+    ];
+    const rawText = 'def foo(\narg1,\narg2,\n):\npass';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(p.text, 'def foo(\n    arg1,\n    arg2,\n):\n    pass');
+  }},
+
+  { group: 'L. visual indent', name: 'L16 try / except / finally bodies all at 4 spaces', run: () => {
+    const words = [
+      w('try:', 0, 0),
+      w('do_something()', 4, 1),
+      w('except', 0, 2),  w('Exception', 7, 2), w('as', 17, 2), w('e:', 20, 2),
+      w('handle(e)', 4, 3),
+      w('finally:', 0, 4),
+      w('cleanup()', 4, 5),
+    ];
+    const rawText = 'try:\ndo_something()\nexcept Exception as e:\nhandle(e)\nfinally:\ncleanup()';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(
+      p.text,
+      'try:\n    do_something()\nexcept Exception as e:\n    handle(e)\nfinally:\n    cleanup()'
+    );
+  }},
+
+  { group: 'L. visual indent', name: 'L17 multiple methods stay at consistent class-body indent', run: () => {
+    const words = [
+      w('class', 0, 0),  w('Foo:', 6, 0),
+      w('def', 4, 1),    w('a(self):', 8, 1),
+      w('return', 8, 2), w('1', 15, 2),
+      // blank row 3 — no words
+      w('def', 4, 4),    w('b(self):', 8, 4),
+      w('return', 8, 5), w('2', 15, 5),
+      // blank row 6 — no words
+      w('def', 4, 7),    w('c(self):', 8, 7),
+      w('return', 8, 8), w('3', 15, 8),
+    ];
+    const rawText =
+      'class Foo:\n' +
+      'def a(self):\n' +
+      'return 1\n' +
+      '\n' +
+      'def b(self):\n' +
+      'return 2\n' +
+      '\n' +
+      'def c(self):\n' +
+      'return 3';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    // All three method `def` lines should land at exactly 4 spaces — drift here
+    // would mean charWidth / baseX is being recomputed inconsistently.
+    const methodDefs = p.lines.filter(l => l.original.startsWith('def'));
+    eq(methodDefs.length, 3);
+    for (const m of methodDefs) eq(m.leadingSpaces, 4, `def line not at 4 spaces: ${m.proposed}`);
+    const returns = p.lines.filter(l => l.original.startsWith('return'));
+    for (const r of returns) eq(r.leadingSpaces, 8, `return line not at 8 spaces: ${r.proposed}`);
+  }},
+
+  { group: 'L. visual indent', name: 'L18 implausible level jumps (>2) trigger visual-indent-jumpy', run: () => {
+    // Two top-level defs with bodies wildly over-indented at level 6.
+    const words = [
+      w('def', 0, 0),  w('a():', 4, 0),
+      w('pass', 24, 1),
+      w('def', 0, 2),  w('b():', 4, 2),
+      w('pass', 24, 3),
+    ];
+    const rawText = 'def a():\npass\ndef b():\npass';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    some(p.warnings, x => x.code === 'visual-indent-jumpy');
+  }},
+
+  { group: 'L. visual indent', name: 'L19 whitespace-only line is treated as blank (output is empty)', run: () => {
+    const words = [
+      w('foo', 0, 0),
+      w('bar', 0, 2),
+    ];
+    const rawText = 'foo\n   \nbar';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    eq(p.text, 'foo\n\nbar');
+    eq(p.lines[1].proposed, '');
+  }},
+
+  { group: 'L. visual indent', name: 'L20 >=30% uncertain lines triggers visual-indent-uncertain', run: () => {
+    // Two of four visual lines have firstX halfway between indent levels.
+    const ambiguous = (text, x0, y0) => ({
+      text, confidence: 90, bbox: { x0, y0, x1: x0 + text.length * CHAR_W, y1: y0 + LINE_H },
+    });
+    const words = [
+      w('class', 0, 0),   w('Foo:', 6, 0),
+      ambiguous('def', 46, 16),  ambiguous('bar(self):', 78, 16),  // x=46 → ambiguous
+      w('return', 8, 2),  w('1', 15, 2),
+      ambiguous('def', 46, 48),  ambiguous('baz(self):', 78, 48),  // x=46 again
+    ];
+    const rawText = 'class Foo:\ndef bar(self):\nreturn 1\ndef baz(self):';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    ok(p.metrics.uncertainLineCount >= 2,
+       `expected at least 2 uncertain lines, got ${p.metrics.uncertainLineCount}`);
+    some(p.warnings, x => x.code === 'visual-indent-uncertain');
+  }},
+
+  { group: 'L. visual indent', name: 'L21 leading whitespace completely lost is the exact target scenario', run: () => {
+    // This is the AbstractHTTPClient-style screenshot: every OCR line starts
+    // flush left, the visual layout is the only signal we have.
+    const words = [
+      w('class', 0, 0),  w('AbstractHTTPClient(metaclass=ABCMeta):', 6, 0),
+      w('def', 4, 1),    w('__new__(cls,', 8, 1), w('*args,', 21, 1), w('**kwargs):', 28, 1),
+      w('if', 8, 2),     w('not', 11, 2), w('hasattr(cls,', 15, 2), w('"_instance"):', 28, 2),
+      w('cls._instance', 12, 3), w('=', 26, 3), w('super().__new__(cls)', 28, 3),
+      w('return', 8, 4), w('cls._instance', 15, 4),
+    ];
+    // Raw text has every line flush-left
+    const rawText =
+      'class AbstractHTTPClient(metaclass=ABCMeta):\n' +
+      'def __new__(cls, *args, **kwargs):\n' +
+      'if not hasattr(cls, "_instance"):\n' +
+      'cls._instance = super().__new__(cls)\n' +
+      'return cls._instance';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    // Spot-check the leading whitespace on each line
+    eq(p.lines[0].leadingSpaces, 0, 'class line at column 0');
+    eq(p.lines[1].leadingSpaces, 4, 'def at column 4');
+    eq(p.lines[2].leadingSpaces, 8, 'if at column 8');
+    eq(p.lines[3].leadingSpaces, 12, 'body at column 12');
+    eq(p.lines[4].leadingSpaces, 8, 'return at column 8');
+  }},
+
+  { group: 'L. visual indent', name: 'L22 confidence and indent-loss warnings are independent', run: () => {
+    // Every word at high confidence (95) but x-positions ambiguous — the proposal
+    // should still flag the lines as uncertain even though OCR was confident.
+    const ambig = (text, x0, y0) => ({
+      text, confidence: 95, bbox: { x0, y0, x1: x0 + text.length * CHAR_W, y1: y0 + LINE_H },
+    });
+    const words = [
+      ambig('class', 0, 0), ambig('Foo:', 48, 0),
+      ambig('def',   46, 16), ambig('bar(self):', 78, 16),
+      ambig('def',   46, 48), ambig('baz(self):', 78, 48),
+    ];
+    const rawText = 'class Foo:\ndef bar(self):\ndef baz(self):';
+    const p = proposeVisualIndentation({ words, rawText, language: 'python' });
+    ok(p.metrics.uncertainLineCount >= 1,
+       'high OCR confidence does not imply low indent uncertainty');
+  }},
+
   // ----------------------------------------------------------------------
   //  H. finalTrim
   // ----------------------------------------------------------------------
